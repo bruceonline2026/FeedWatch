@@ -1,0 +1,542 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FeedWatch — RSS/Atom 变更监控 API|检测条目修改，字段级 diff</title>
+<meta name="description" content="RSS、Atom、JSON Feed 变更监控 API。不同于只报「新增条目」的竞品，我们检测已有条目被修改，并给出字段级 diff。提供 REST API 与 MCP Server。">
+<link rel="canonical" href="https://api.tiici.com/">
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#fbfaf8; --surface:#fff; --surface-2:#f5f4f0;
+  --text:#1a1a18; --text-2:#5c5b56; --text-3:#8a8983;
+  --border:#e3e1db; --border-2:#cfccc4;
+  --accent:#c2410c; --accent-soft:#fff2e8; --accent-border:#fed7aa;
+  --ok:#0f6e56; --ok-soft:#e6f5ef;
+  --warn:#854f0b; --warn-soft:#fdf3e3;
+  --code-bg:#1c1c1a; --code-text:#e8e6e0;
+  --radius:12px;
+  --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+  --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,"PingFang SC","Microsoft YaHei",sans-serif;
+}
+html{scroll-behavior:smooth}
+body{font-family:var(--sans);background:var(--bg);color:var(--text);line-height:1.65;font-size:15px;-webkit-font-smoothing:antialiased}
+.wrap{max-width:1080px;margin:0 auto;padding:0 24px}
+a{color:var(--accent);text-decoration:none}
+a:hover{text-decoration:underline}
+code{font-family:var(--mono);font-size:.88em}
+
+/* header */
+header{position:sticky;top:0;z-index:50;background:rgba(251,250,248,.92);backdrop-filter:blur(8px);border-bottom:1px solid var(--border)}
+.hd{display:flex;align-items:center;gap:28px;height:60px}
+.logo{display:flex;align-items:center;gap:9px;font-weight:600;font-size:16px;color:var(--text)}
+.mark{width:24px;height:24px;border-radius:6px;background:var(--accent);display:grid;place-items:center;flex:none}
+.mark svg{width:14px;height:14px;stroke:#fff;stroke-width:2.2;fill:none}
+nav{margin-left:auto;display:flex;gap:24px;font-size:14px}
+nav a{color:var(--text-2)}
+nav a:hover{color:var(--text);text-decoration:none}
+.hd .cta{margin-left:8px}
+
+/* buttons */
+.btn{display:inline-flex;align-items:center;gap:6px;padding:9px 16px;border-radius:8px;font-size:14px;font-weight:500;border:1px solid transparent;cursor:pointer;font-family:inherit;transition:.15s}
+.btn-primary{background:var(--accent);color:#fff}
+.btn-primary:hover{background:#9a3412;text-decoration:none;color:#fff}
+.btn-ghost{border-color:var(--border-2);color:var(--text);background:transparent}
+.btn-ghost:hover{border-color:var(--text-3);text-decoration:none;color:var(--text)}
+.btn-lg{padding:12px 22px;font-size:15px}
+.btn-row{display:flex;gap:12px;flex-wrap:wrap;margin-top:26px}
+
+/* hero */
+.hero{padding:78px 0 66px;border-bottom:1px solid var(--border)}
+.badge{display:inline-flex;align-items:center;gap:7px;padding:5px 12px;border-radius:99px;font-size:12.5px;font-weight:500;background:var(--accent-soft);color:var(--accent);border:1px solid var(--accent-border)}
+.dot{width:6px;height:6px;border-radius:50%;background:currentColor;flex:none}
+h1{font-size:clamp(30px,5vw,46px);line-height:1.18;font-weight:600;letter-spacing:-.02em;margin:20px 0 0;max-width:17ch}
+.lede{font-size:17px;color:var(--text-2);margin-top:18px;max-width:60ch;line-height:1.7}
+.lede strong{color:var(--text);font-weight:500}
+
+/* problem */
+.prob{background:var(--surface-2);border-bottom:1px solid var(--border)}
+.pg{display:grid;grid-template-columns:1fr 1fr;gap:0;border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;background:var(--surface)}
+.pc{padding:26px 28px}
+.pc+.pc{border-left:1px solid var(--border)}
+.pc h3{font-size:14px;font-weight:600;margin-bottom:12px;display:flex;align-items:center;gap:8px}
+.pc.bad h3{color:var(--text-3)}
+.pc.good h3{color:var(--ok)}
+.chg{font-family:var(--mono);font-size:12.5px;line-height:1.75;padding:9px 11px;border-radius:7px;margin-bottom:7px;overflow-x:auto;white-space:nowrap}
+.chg.rm{background:var(--warn-soft);color:var(--warn)}
+.chg.diff{background:var(--ok-soft);color:var(--ok)}
+.chg .del{text-decoration:line-through;opacity:.65}
+.chg .ins{font-weight:600;text-decoration:underline;text-underline-offset:2px}
+.chg .lbl{font-size:11px;opacity:.7;margin-right:6px}
+
+/* sections */
+section{padding:66px 0;border-bottom:1px solid var(--border)}
+h2{font-size:26px;font-weight:600;letter-spacing:-.01em;margin-bottom:12px}
+.sub{color:var(--text-2);max-width:64ch;margin-bottom:34px;font-size:15.5px}
+
+/* features */
+.fg{display:grid;grid-template-columns:repeat(3,1fr);gap:1px;background:var(--border);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden}
+.fc{background:var(--surface);padding:24px}
+.fc h4{font-size:14.5px;font-weight:600;margin-bottom:7px}
+.fc p{font-size:13.5px;color:var(--text-2);line-height:1.6}
+.ic{width:30px;height:30px;border-radius:8px;background:var(--accent-soft);display:grid;place-items:center;margin-bottom:13px}
+.ic svg{width:16px;height:16px;stroke:var(--accent);stroke-width:1.9;fill:none}
+
+/* steps */
+.steps{display:grid;grid-template-columns:repeat(3,1fr);gap:26px}
+.step .n{width:26px;height:26px;border-radius:50%;background:var(--text);color:#fff;display:grid;place-items:center;font-size:13px;font-weight:600;margin-bottom:12px}
+.step h4{font-size:14.5px;font-weight:600;margin-bottom:6px}
+.step p{font-size:13.5px;color:var(--text-2)}
+
+/* code */
+.codeblock{background:var(--code-bg);border-radius:var(--radius);overflow:hidden;border:1px solid #2e2e2a}
+.cb-hd{display:flex;align-items:center;gap:6px;padding:10px 14px;border-bottom:1px solid #2e2e2a;background:#232320}
+.cb-hd .f{font-family:var(--mono);font-size:12px;color:#9a9992}
+.cb-hd .tabs{margin-left:auto;display:flex;gap:4px}
+.tab{font-size:11.5px;padding:3px 9px;border-radius:5px;color:#9a9992;cursor:pointer;border:1px solid transparent;font-family:inherit}
+.tab.on{background:#2e2e2a;color:#e8e6e0;border-color:#3d3d38}
+pre{padding:18px 20px;overflow-x:auto;font-family:var(--mono);font-size:12.8px;line-height:1.75;color:var(--code-text)}
+pre .c{color:#6f6e68}
+pre .k{color:#c2410c}
+pre .s{color:#0f6e56}
+pre .f{color:#7c7b74}
+.pane{display:none}
+.pane.on{display:block}
+
+/* usecases */
+.uc{display:grid;grid-template-columns:repeat(2,1fr);gap:1px;background:var(--border);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden}
+.uc-i{background:var(--surface);padding:22px 24px}
+.uc-i h4{font-size:14px;font-weight:600;margin-bottom:6px}
+.uc-i p{font-size:13.5px;color:var(--text-2);line-height:1.6}
+
+/* pricing */
+.pg2{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}
+.plan{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:22px 20px;display:flex;flex-direction:column}
+.plan.hot{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent)}
+.plan .tag{font-size:11px;font-weight:600;color:var(--accent);text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px}
+.plan .price{font-size:28px;font-weight:600;letter-spacing:-.02em}
+.plan .price span{font-size:13px;font-weight:400;color:var(--text-3)}
+.plan .desc{font-size:13px;color:var(--text-2);margin:7px 0 16px;min-height:38px}
+.plan ul{list-style:none;font-size:13px;margin-bottom:20px;flex:1}
+.plan li{padding:5px 0;color:var(--text-2);display:flex;gap:7px;align-items:flex-start;line-height:1.5}
+.plan li svg{width:14px;height:14px;stroke:var(--ok);stroke-width:2.4;fill:none;flex:none;margin-top:3px}
+.plan li.off{color:var(--text-3)}
+.plan li.off svg{stroke:var(--text-3);opacity:.4}
+.note{margin-top:20px;font-size:13px;color:var(--text-2);padding:14px 16px;background:var(--surface-2);border-radius:9px;border:1px solid var(--border)}
+.note strong{color:var(--text)}
+
+/* faq */
+.faq{max-width:760px}
+details{border-bottom:1px solid var(--border);padding:16px 0}
+summary{cursor:pointer;font-size:14.5px;font-weight:500;list-style:none;display:flex;justify-content:space-between;gap:16px;align-items:flex-start}
+summary::-webkit-details-marker{display:none}
+summary::after{content:"+";font-size:19px;font-weight:300;color:var(--text-3);flex:none;line-height:1.3}
+details[open] summary::after{content:"−"}
+details p{margin-top:11px;font-size:13.5px;color:var(--text-2);line-height:1.7;padding-right:24px}
+details code{background:var(--surface-2);padding:1.5px 5px;border-radius:4px;border:1px solid var(--border)}
+
+/* cta band */
+.band{background:var(--surface-2);text-align:center}
+.band h2{margin-bottom:10px}
+
+/* footer */
+footer{padding:34px 0;font-size:13px;color:var(--text-3)}
+.fd{display:flex;gap:22px;flex-wrap:wrap;align-items:center}
+.fd nav{margin:0;gap:20px;font-size:13px}
+.fd .sep{margin-left:auto}
+
+@media(max-width:880px){
+  .pg,.uc,.fg{grid-template-columns:1fr}
+  .pc+.pc{border-left:none;border-top:1px solid var(--border)}
+  .steps,.pg2{grid-template-columns:1fr 1fr}
+  nav{display:none}
+}
+@media(max-width:560px){
+  .steps,.pg2{grid-template-columns:1fr}
+  .wrap{padding:0 18px}
+  .hero{padding:52px 0 44px}
+  section{padding:46px 0}
+}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap hd">
+    <div class="logo">
+      <span class="mark"><svg viewBox="0 0 24 24"><path d="M4 12a8 8 0 018 8M4 6a14 14 0 0114 14"/><circle cx="5" cy="19" r="1.4" fill="#fff" stroke="none"/></svg></span>
+      FeedWatch
+    </div>
+    <nav>
+      <a href="#difference">差异</a>
+      <a href="#how">怎么用</a>
+      <a href="#mcp">MCP</a>
+      <a href="#pricing">定价</a>
+      <a href="#faq">FAQ</a>
+    </nav>
+    <a href="https://api.tiici.com/health" class="btn btn-ghost cta" target="_blank" rel="noopener">服务状态</a>
+  </div>
+</header>
+
+<section class="hero">
+  <div class="wrap">
+    <span class="badge"><span class="dot"></span>公开测试中 · API 已上线</span>
+    <h1>知道 Feed 变了，而不只是变多了</h1>
+    <p class="lede">
+      多数监控工具只能告诉你<strong>「新增了一条」</strong>。
+      但新闻更正错字、竞品悄悄改价格、政策条款被微调 —— 这些都是<strong>已有条目被修改</strong>，
+      不产生新条目，因此被漏掉。FeedWatch 检测这类修改，并给出<strong>字段级 diff</strong>。
+    </p>
+    <div class="btn-row">
+      <a href="#how" class="btn btn-primary btn-lg">获取 API Key</a>
+      <a href="#mcp" class="btn btn-ghost btn-lg">用 MCP 接入</a>
+    </div>
+  </div>
+</section>
+
+<section class="prob">
+  <div class="wrap">
+    <div class="pg">
+      <div class="pc bad">
+        <h3>只报新增的监控</h3>
+        <div class="chg rm"><span class="lbl">检测结果</span>无变化</div>
+        <div class="chg rm"><span class="lbl">实际发生</span>价格 $19.99 → <span class="del">$29.99</span></div>
+        <p style="font-size:13px;color:var(--text-2);margin-top:14px;line-height:1.6">
+          条目 id 没变、内容变了，但工具只对比 id 集合，于是判定「无变化」。
+          告警不会发出 —— 而这正是你最需要知道的那次变化。
+        </p>
+      </div>
+      <div class="pc good">
+        <h3>FeedWatch</h3>
+        <div class="chg diff"><span class="lbl">price</span><span class="del">19.99</span> → <span class="ins">29.99</span></div>
+        <div class="chg diff"><span class="lbl">title</span><span class="del">Starter</span> → <span class="ins">Starter (New Pricing)</span></div>
+        <p style="font-size:13px;color:var(--text-2);margin-top:14px;line-height:1.6">
+          逐字段比对 <code>title / contentText / link / publishedAt / author / category</code>，
+          变化就推送，连改了什么值都告诉你。正文只送哈希与长度，不回传全文。
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="how">
+  <div class="wrap">
+    <h2>三步接入</h2>
+    <p class="sub">REST 调用或 MCP 二选一，两条路走同一套核心逻辑。</p>
+    <div class="steps">
+      <div class="step">
+        <div class="n">1</div>
+        <h4>创建监控点</h4>
+        <p>提交一个 RSS / Atom / JSON Feed 地址，指定检查频率（15 分钟 / 1 小时 / 6 小时）。</p>
+      </div>
+      <div class="step">
+        <div class="n">2</div>
+        <h4>我们定时抓取比对</h4>
+        <p>每轮先用哈希粗筛，未变则零成本跳过；变了才做逐字段 diff，不产生抖动误报。</p>
+      </div>
+      <div class="step">
+        <div class="n">3</div>
+        <h4>推送变更</h4>
+        <p>Webhook 投递（HMAC 签名，带重试），也支持 Slack / Discord。</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="api" style="padding-bottom:0">
+  <div class="wrap">
+    <h2>调用示例</h2>
+    <p class="sub">所有请求走 <code>https://api.tiici.com</code>，鉴权用 <code>x-api-key</code> 头。</p>
+    <div class="codeblock">
+      <div class="cb-hd">
+        <span class="f" id="cbName">创建监控点</span>
+        <span class="tabs">
+          <button class="tab on" data-t="0">创建</button>
+          <button class="tab" data-t="1">检查</button>
+          <button class="tab" data-t="2">推送</button>
+        </span>
+      </div>
+      <div class="pane on"><pre><span class="c"># 创建监控点</span>
+curl -X POST https://api.tiici.com/v1/monitors \
+  -H <span class="s">"x-api-key: $FEEDWATCH_KEY"</span> \
+  -H <span class="s">"content-type: application/json"</span> \
+  -d <span class="s">'{
+    "name": "竞品定价页",
+    "url": "https://example.com/pricing.atom",
+    "intervalSeconds": 3600,
+    "keywords": ["price", "pricing"]
+  }'</span></pre></div>
+      <div class="pane"><pre><span class="c"># 立即检查一次（不必等调度）</span>
+curl -X POST https://api.tiici.com/v1/monitors/<span class="s">mon_xxx</span>/check \
+  -H <span class="s">"x-api-key: $FEEDWATCH_KEY"</span>
+
+<span class="c"># →</span>
+{ <span class="f">"changed"</span>: <span class="k">true</span>, <span class="f">"format"</span>: <span class="s">"atom"</span>,
+  <span class="f">"change_count"</span>: <span class="k">1</span>,
+  <span class="f">"changes"</span>: [{ <span class="f">"change_type"</span>: <span class="s">"modified"</span>,
+    <span class="f">"title"</span>: <span class="s">"Starter"</span>,
+    <span class="f">"diff"</span>: [{ <span class="f">"field"</span>: <span class="s">"title"</span>,
+                 <span class="f">"old"</span>: <span class="s">"Starter"</span>, <span class="f">"new"</span>: <span class="s">"Starter (New Pricing)"</span> }] }] }</pre></div>
+      <div class="pane"><pre><span class="c"># Webhook 收到的载荷</span>
+{
+  <span class="f">"event"</span>: <span class="s">"feed.changed"</span>,
+  <span class="f">"monitor_id"</span>: <span class="s">"mon_xxx"</span>,
+  <span class="f">"url"</span>: <span class="s">"https://example.com/pricing.atom"</span>,
+  <span class="f">"format"</span>: <span class="s">"atom"</span>,
+  <span class="f">"detected_at"</span>: <span class="s">"2026-10-15T08:48:29.900Z"</span>,
+  <span class="f">"change_count"</span>: <span class="k">1</span>,
+  <span class="f">"changes"</span>: [{
+    <span class="f">"change_type"</span>: <span class="s">"modified"</span>,   <span class="c"># added | modified | removed</span>
+    <span class="f">"title"</span>: <span class="s">"Starter"</span>,
+    <span class="f">"diff"</span>: [{ <span class="f">"field"</span>: <span class="s">"title"</span>,
+                 <span class="f">"old"</span>: <span class="s">"Starter"</span>, <span class="f">"new"</span>: <span class="s">"Starter (New Pricing)"</span> }]
+  }]
+}</pre></div>
+    </div>
+    <p style="font-size:13px;color:var(--text-2);margin-top:14px">
+      响应头带 <code>x-feedwatch-signature</code>（HMAC-SHA256），请务必验签后再处理。
+    </p>
+  </div>
+</section>
+
+<section id="mcp">
+  <div class="wrap">
+    <h2>直接挂到你的 AI 助手</h2>
+    <p class="sub">MCP Streamable HTTP 端点，三个工具：建监控、列监控、立即检查一次。Claude / Cursor 等客户端可直接配置。</p>
+    <div class="codeblock">
+      <div class="cb-hd"><span class="f">MCP 客户端配置</span></div>
+      <pre>{
+  <span class="f">"mcpServers"</span>: {
+    <span class="f">"feedwatch"</span>: {
+      <span class="f">"url"</span>: <span class="s">"https://api.tiici.com/mcp"</span>,
+      <span class="f">"headers"</span>: { <span class="f">"x-api-key"</span>: <span class="s">"&lt;your-key&gt;"</span> }
+    }
+  }
+}
+
+<span class="c">// 工具</span>
+create_monitor(url, name?, intervalSeconds?, keywords?)  <span class="c">建监控</span>
+list_monitors()                                        <span class="c">列监控</span>
+check_feed(url)                                        <span class="c">立即检查一次</span></pre>
+    </div>
+  </div>
+</section>
+
+<section id="difference">
+  <div class="wrap">
+    <h2>能力清单</h2>
+    <p class="sub">全部是线上服务已实测通过的能力，不是路线图。</p>
+    <div class="fg">
+      <div class="fc">
+        <div class="ic"><svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10"/></svg></div>
+        <h4>字段级 diff</h4>
+        <p>逐字段比对 6 个字段，变化带 old / new 值推送。正文只送哈希与长度。</p>
+      </div>
+      <div class="fc">
+        <div class="ic"><svg viewBox="0 0 24 24"><path d="M5 12a7 7 0 017 7M5 6a13 13 0 0113 13"/><circle cx="6" cy="18" r="1.3"/></svg></div>
+        <h4>三协议</h4>
+        <p>RSS 2.0（含 RDF）、Atom 1.0、JSON Feed 1.1，自动识别。</p>
+      </div>
+      <div class="fc">
+        <div class="ic"><svg viewBox="0 0 24 24"><path d="M12 3v18M3 12h18"/></svg></div>
+        <h4>REST + MCP 双入口</h4>
+        <p>同一套核心逻辑两个入口，维护成本几乎不增加。</p>
+      </div>
+      <div class="fc">
+        <div class="ic"><svg viewBox="0 0 24 24"><path d="M9 12l2 2 4-4"/><rect x="4" y="5" width="16" height="14" rx="2"/></svg></div>
+        <h4>签名 Webhook</h4>
+        <p>HMAC-SHA256 签名头，失败自动重试 3 次（1s / 5s / 15s 退避）。</p>
+      </div>
+      <div class="fc">
+        <div class="ic"><svg viewBox="0 0 24 24"><path d="M4 5h16v11H8l-4 4z"/></svg></div>
+        <h4>多通道通知</h4>
+        <p>Webhook、Slack、Discord 三种通道，收到变更即推送。</p>
+      </div>
+      <div class="fc">
+        <div class="ic"><svg viewBox="0 0 24 24"><path d="M12 3l7 3v5c0 4.5-3 8.5-7 10-4-1.5-7-5.5-7-10V6z"/></svg></div>
+        <h4>SSRF 防护</h4>
+        <p>DNS 钉 IP + 逐跳重校验，内网与云元数据地址一律拒绝。Webhook 通道同样覆盖。</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="usecases">
+  <div class="wrap">
+    <h2>典型场景</h2>
+    <p class="sub">都是「条目被修改」而非「新增」才有价值的场景。</p>
+    <div class="uc">
+      <div class="uc-i">
+        <h4>竞品定价监控</h4>
+        <p>对手悄悄调价但不公告。条目 id 不变，只有价格字段变了 —— 这类变更普通工具完全看不到。</p>
+      </div>
+      <div class="uc-i">
+        <h4>安全公告</h4>
+        <p>CVE 条目发布后常被补充 CVSS 评分、受影响版本、修复链接。这些都是同一条目的字段更新。</p>
+      </div>
+      <div class="uc-i">
+        <h4>政策与合规追踪</h4>
+        <p>条款措辞的微调、处罚金额的调整。监管页面不会为每次改字新增条目。</p>
+      </div>
+      <div class="uc-i">
+        <h4>GitHub Release 跟踪</h4>
+        <p>Release 说明、预发布标记、资产列表的后续修订，都是已有 tag 上的字段变化。</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="pricing">
+  <div class="wrap">
+    <h2>定价</h2>
+    <p class="sub">验证期价格，先用免费层撞到上限再决定。</p>
+    <div class="pg2">
+      <div class="plan">
+        <div class="price">$0<span> /月</span></div>
+        <div class="desc">试用与个人项目</div>
+        <ul>
+          <li><svg viewBox="0 0 24 24"><path d="M5 12l5 5L20 7"/></svg>5 个监控点</li>
+          <li><svg viewBox="0 0 24 24"><path d="M5 12l5 5L20 7"/></svg>6 小时检查一次</li>
+          <li><svg viewBox="0 0 24 24"><path d="M5 12l5 5L20 7"/></svg>Webhook + Slack / Discord</li>
+          <li><svg viewBox="0 0 24 24"><path d="M5 12l5 5L20 7"/></svg>字段级 diff</li>
+        </ul>
+        <a href="#how" class="btn btn-ghost" style="justify-content:center">免费开始</a>
+      </div>
+      <div class="plan hot">
+        <div class="tag">最常选</div>
+        <div class="price">$9<span> /月</span></div>
+        <div class="desc">小团队与个人开发者</div>
+        <ul>
+          <li><svg viewBox="0 0 24 24"><path d="M5 12l5 5L20 7"/></svg>25 个监控点</li>
+          <li><svg viewBox="0 0 24 24"><path d="M5 12l5 5L20 7"/></svg>1 小时检查一次</li>
+          <li><svg viewBox="0 0 24 24"><path d="M5 12l5 5L20 7"/></svg>关键词过滤</li>
+          <li><svg viewBox="0 0 24 24"><path d="M5 12l5 5L20 7"/></svg>字段级 diff</li>
+        </ul>
+        <a href="#how" class="btn btn-primary" style="justify-content:center">升级 Starter</a>
+      </div>
+      <div class="plan">
+        <div class="price">$29<span> /月</span></div>
+        <div class="desc">生产环境与更高频</div>
+        <ul>
+          <li><svg viewBox="0 0 24 24"><path d="M5 12l5 5L20 7"/></svg>100 个监控点</li>
+          <li><svg viewBox="0 0 24 24"><path d="M5 12l5 5L20 7"/></svg>15 分钟检查一次</li>
+          <li><svg viewBox="0 0 24 24"><path d="M5 12l5 5L20 7"/></svg>关键词过滤</li>
+          <li><svg viewBox="0 0 24 24"><path d="M5 12l5 5L20 7"/></svg>字段级 diff</li>
+        </ul>
+        <a href="#how" class="btn btn-ghost" style="justify-content:center">升级 Pro</a>
+      </div>
+      <div class="plan">
+        <div class="price">面议</div>
+        <div class="desc">用量更大或有合规要求</div>
+        <ul>
+          <li><svg viewBox="0 0 24 24"><path d="M5 12l5 5L20 7"/></svg>监控点数量协商</li>
+          <li><svg viewBox="0 0 24 24"><path d="M5 12l5 5L20 7"/></svg>字段级 diff</li>
+          <li><svg viewBox="0 0 24 24"><path d="M5 12l5 5L20 7"/></svg>Webhook + Slack / Discord</li>
+          <li class="off"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg><span>按量计费与 SLA<span style="opacity:.7"> —— 尚未提供，需单独约定</span></span></li>
+        </ul>
+        <a href="#how" class="btn btn-ghost" style="justify-content:center">联系我们</a>
+      </div>
+    </div>
+    <p class="note">
+      <strong>关于付款：</strong>验证期通过 Payoneer 收款链接支付，信用卡约 1 小时到账。
+      付款后我们会邮件发送 API Key，一小时内完成开通。
+      <br><br>
+      <strong>免费层没有时间限制。</strong>免费额度按监控点数计算，用完<strong>不会自动扣费</strong>、
+      也<strong>不会降级</strong>你已有的监控点 —— 只是不能再新建。已有监控继续正常跑，
+      什么时候想升级、或者用不上需要更多，联系我们即可。
+      <br><br>
+      <strong>撞到上限会怎样：</strong>新建第 6 个监控点时接口返回 <code>429</code>，
+      响应里带一句提示和升级链接。不会静默失败，也不会偷偷把你已有的停掉。
+    </p>
+  </div>
+</section>
+
+<section id="faq" class="band">
+  <div class="wrap faq">
+    <h2>常见问题</h2>
+    <div style="height:22px"></div>
+    <details>
+      <summary>它和普通的 RSS 监控工具有什么区别？</summary>
+      <p>核心差异在「修改检测」。多数工具对比条目 id 集合，只有新增或消失才告警。
+      而 FeedWatch 会把已有条目的 6 个字段逐个比对，值变了照样推送，并给出 old / new。
+      比如竞品把价格从 $19.99 改成 $29.99 —— 条目还是那条，别的工具判定「无变化」。</p>
+    </details>
+    <details>
+      <summary>支持哪些 Feed 格式？</summary>
+      <p>RSS 2.0（含 RDF 变体）、Atom 1.0、JSON Feed 1.1，提交地址后自动识别，无需指定。
+      实测覆盖 GitHub Releases、Hacker News、Ars Technica、NASA、Cloudflare Blog、
+      人民网、中新网等国内外来源。</p>
+    </details>
+    <details>
+      <summary>检查频率能自己定吗？</summary>
+      <p>可以，当前提供三档：15 分钟（900 秒）、1 小时（3600 秒）、6 小时（21600 秒）。
+      更激进的频率需要联系我们在更高档位中开放。</p>
+    </details>
+    <details>
+      <summary>Webhook 怎么验证签名？</summary>
+      <p>响应头带 <code>x-feedwatch-signature</code>，是按请求体计算的 HMAC-SHA256。
+      必须验签 —— 不验签的话，任何人都能伪造一条合法推送。
+      未配置 secret 时我们不会发送该头，客户端能明确区分「未配置」而非误以为已验签。</p>
+    </details>
+    <details>
+      <summary>会限制请求频率吗？</summary>
+      <p>会。<code>/mcp</code> 端点与监控点创建都有滑动窗口限流，避免单个 key 占满资源。
+      超出时会返回 429。具体额度当前按套餐档位设置，细节可在接入时确认。</p>
+    </details>
+    <details>
+      <summary>数据存在哪里？会保存 feed 内容吗？</summary>
+      <p>快照只保存计算 diff 所需的字段与哈希，用于比对，不存储完整正文原文。
+      监控点配置与状态在当前版本存于内存，服务重启后清空 —— 这是测试期的已知限制，
+      正式版本会迁移到持久化存储。</p>
+    </details>
+    <details>
+      <summary>能监控哪些地址？会不会被用来扫内网？</summary>
+      <p>出于安全考虑，只允许抓取公网地址。DNS 解析到私有网段、回环地址或云元数据地址
+      （如 169.254.169.254）的请求会被直接拒绝。重定向也会逐跳重新校验。
+      提交的 webhook 地址走同一套防护。</p>
+    </details>
+    <details>
+      <summary>怎么开始？</summary>
+      <p>选好档位后联系我们，说明监控的 Feed 地址和大致数量，我们会发收款链接给你。
+      付款到账后邮件发送 API Key，之后就是上面的 curl 或 MCP 配置。
+      想先用免费层试手的，直接说即可，无需付款。</p>
+    </details>
+  </div>
+</section>
+
+<section class="band" style="border-bottom:none">
+  <div class="wrap">
+    <h2>先免费试五个监控点</h2>
+    <p class="sub" style="margin-left:auto;margin-right:auto">不用绑卡，不用登记公司主体。撞到上限再说。</p>
+    <a href="#pricing" class="btn btn-primary btn-lg">开始使用</a>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap fd">
+    <span>© 2026 FeedWatch</span>
+    <nav>
+      <a href="https://api.tiici.com/health" target="_blank" rel="noopener">服务状态</a>
+      <a href="/mcp">MCP 端点</a>
+      <a href="#pricing">定价</a>
+    </nav>
+    <span class="sep">运行于东京 · api.tiici.com</span>
+  </div>
+</footer>
+
+<script>
+document.querySelectorAll('.tab').forEach(function(t){
+  t.addEventListener('click', function(){
+    var box = t.closest('.codeblock');
+    box.querySelectorAll('.tab').forEach(function(x){ x.classList.remove('on'); });
+    box.querySelectorAll('.pane').forEach(function(x){ x.classList.remove('on'); });
+    t.classList.add('on');
+    box.querySelectorAll('.pane')[Number(t.dataset.t)].classList.add('on');
+    var names = ['创建监控点','立即检查','推送载荷'];
+    box.querySelector('.cb-hd .f').textContent = names[Number(t.dataset.t)];
+  });
+});
+</script>
+</body>
+</html>

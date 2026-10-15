@@ -1,0 +1,25 @@
+node_modules/
+logs/
+*.log
+.env
+.DS_Store
+
+# ── 密钥与凭据：绝不进仓库 ──
+keys/
+*.pem
+*.key
+!keys/*.pub.txt
+
+# ★ 本地私有配置（放引导密钥 / 代理账号密码）
+#   由 deploy/run-node.cmd 自动加载。请把真实凭据写进这个文件，
+#   它已被排除，误提交也会被git 拦下。
+deploy/run-node.local.cmd
+deploy/*.local.cmd
+deploy/*.local.ini
+
+# ── 工具产物 ──
+.workbuddy/
+
+# ── 明确不公开的内容 ──
+#   内部审查报告含生产事故细节、内网 IP、服务器凭据线索，不随仓库公开
+deliverables/

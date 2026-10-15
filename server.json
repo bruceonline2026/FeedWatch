@@ -1,0 +1,89 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-09-29/server.schema.json",
+  "name": "io.github.bruceonline2026/feedwatch",
+  "description": "Monitor RSS/Atom/JSON feeds; alerts on new items AND edits to existing ones, with field-level diffs.",
+  "version": "0.1.0",
+  "websiteUrl": "https://api.tiici.com/",
+  "repository": {
+    "url": "https://github.com/bruceonline2026/FeedWatch",
+    "source": "github"
+  },
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "feedwatch-mcp",
+      "version": "0.1.0"
+    }
+  ],
+  "remotes": [
+    {
+      "type": "streamable-http",
+      "url": "https://api.tiici.com/mcp"
+    }
+  ],
+  "tools": [
+    {
+      "name": "create_monitor",
+      "title": "Create a change monitor",
+      "description": "Create a change monitor on an RSS, Atom, or JSON Feed URL. Reports new items and - unlike most tools - edits to existing items, with field-level diffs.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "url": {
+            "type": "string",
+            "description": "The RSS/Atom/JSON Feed URL to monitor"
+          },
+          "name": {
+            "type": "string",
+            "description": "Optional human-readable label"
+          },
+          "intervalSeconds": {
+            "type": "integer",
+            "enum": [900, 3600, 21600],
+            "description": "Check frequency. 21600=6h (free tier), 3600=1h, 900=15min. Default 21600."
+          },
+          "keywords": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Only alert when title or content matches one of these keywords"
+          }
+        },
+        "required": ["url"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "list_monitors",
+      "title": "List change monitors",
+      "description": "List all change monitors for this account with their status and next check time.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "check_feed",
+      "title": "Check a feed once",
+      "description": "Fetch a feed immediately and return detected changes (added / modified / removed) with field-level diffs. Does not require a monitor to exist.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "url": {
+            "type": "string",
+            "description": "Feed URL to check once"
+          }
+        },
+        "required": ["url"],
+        "additionalProperties": false
+      }
+    }
+  ],
+  "security": {
+    "scheme": "apiKey",
+    "headerName": "x-api-key",
+    "in": "header"
+  }
+}

@@ -1,0 +1,28 @@
+startCommand:
+  type: stdio
+  configSchema:
+    type: object
+    required:
+      - feedwatch_api_key
+    properties:
+      feedwatch_api_key:
+        type: string
+        description: FeedWatch API key. Get one at https://api.tiici.com/
+  commandFunction: |-
+    (config) => ({
+      command: 'node',
+      args: ['${__dirname}/src/mcp/stdio-bridge.js'],
+      env: {
+        FEEDWATCH_API_KEY: config.feedwatch_api_key,
+        FEEDWATCH_BASE_URL: 'https://api.tiici.com'
+      }
+    })
+  exampleConfig:
+    feedwatch_api_key: fw_your_key_here
+
+build:
+  dockerImage: 'node:22-slim'
+  dockerBuildArgs:
+    - FEEDWATCH_BASE_URL=https://api.tiici.com
+
+tools_generated: true

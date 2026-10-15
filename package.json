@@ -1,0 +1,43 @@
+{
+  "name": "feedwatch-mcp",
+  "version": "0.1.0",
+  "description": "RSS/Atom/JSON Feed change monitoring with field-level diff, webhook push, and MCP endpoint",
+  "type": "module",
+  "main": "src/server.js",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/bruceonline2026/FeedWatch.git"
+  },
+  "homepage": "https://api.tiici.com/",
+  "bugs": {
+    "url": "https://github.com/bruceonline2026/FeedWatch/issues"
+  },
+  "keywords": [
+    "rss",
+    "atom",
+    "json-feed",
+    "change-monitoring",
+    "diff",
+    "webhook",
+    "mcp",
+    "model-context-protocol",
+    "api"
+  ],
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "test": "node scripts/selftest.js && node scripts/regression.js && node scripts/regression-functional.js && node scripts/regression-scheduler.js && node scripts/e2e.js",
+    "test:live": "env -u HTTP_PROXY -u HTTPS_PROXY -u http_proxy -u https_proxy node scripts/livefeed-test.js",
+    "selftest": "node scripts/selftest.js",
+    "regression": "node scripts/regression.js",
+    "e2e": "node scripts/e2e.js",
+    "connectivity": "node deploy/connectivity-probe.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "fast-xml-parser": "^4.5.7"
+  }
+}
