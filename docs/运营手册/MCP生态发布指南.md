@@ -41,35 +41,86 @@
 
 ### Step 1 · 安装发布 CLI
 
+⚠️ **`mcp-publisher` 不发布到 npm** —— `npm install -g @modelcontextprotocol/registry-publisher`
+会返回 `404 Not Found`（**已于 2026-07-15 实测踩坑**）。官方只提供预编译二进制。
+
+**推荐：Homebrew**
 ```bash
-npm install -g @modelcontextprotocol/registry-publisher
+brew install mcp-publisher
 ```
 
-### Step 2 · 登录（走 GitHub 设备流）
+**或：官方预编译二进制**（自动识别系统与架构）
+```bash
+curl -L "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" \
+  | tar xz mcp-publisher && sudo mv mcp-publisher /usr/local/bin/
+```
+
+**Windows**（PowerShell）
+```powershell
+$arch = if ([System.Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture -eq "Arm64") { "arm64" } else { "amd64" }
+Invoke-WebRequest -Uri "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_windows_$arch.tar.gz" -OutFile "mcp-publisher.tar.gz"
+tar xf mcp-publisher.tar.gz mcp-publisher.exe; rm mcp-publisher.tar.gz
+# 把 mcp-publisher.exe 放进 PATH
+```
+
+验证：
+```bash
+mcp-publisher --help
+# 应列出：init / login / logout / publish / status / validate
+```
+
+### Step 2 · 先验证（**不要跳过**）
 
 ```bash
 cd /Users/jiayongxu/360AI云盘同步版/LightWork/02实施/06MCP
+mcp-publisher validate
+```
+
+`validate` 只校验不发布。**官方 schema 可能要求我们没填的字段**，
+先验一遍能立刻知道缺什么，比 `publish` 失败再回头查快得多。
+
+> ⚠️ **本项目是纯远程端点模式**，不需要发 npm 包、不需要 npm 账号。
+> 官方原文：「If your MCP server is available only at a public remote endpoint,
+> you can publish its metadata without a package.」
+> 若 `validate` 提示 `packages` 字段有问题，**直接把 `server.json` 里的 `packages` 数组删掉**即可。
+
+### Step 3 · 登录（走 GitHub 设备流）
+
+```bash
 mcp-publisher login github
 ```
 
-浏览器会打开授权页 → 确认授权。
+浏览器打开授权页 → 用 **`bruceonline2026`** 账号确认。
 
-> ⚠️ 必须用 `bruceonline2026` 账号登录 —— 它是 `io.github.bruceonline2026/*`
-> 命名空间的**所有者**，GitHub 授权才能拿到该 namespace 的发布权。
+> ⚠️ 必须是这个账号 —— 它是 `io.github.bruceonline2026/*` 命名空间的**所有者**，
+> GitHub 授权才能拿到该 namespace 的发布权。用别的账号会授权失败。
 
-### Step 3 · 发布
+### Step 4 · 发布
 
 ```bash
-mcp-publisher publish          # 读取当前目录的 server.json
+mcp-publisher publish
 ```
 
-### Step 4 · 验证
+### Step 5 · 验证结果
 
 ```bash
 curl "https://registry.modelcontextprotocol.io/v0.1/servers?search=io.github.bruceonline2026/feedwatch"
 ```
 
 能看到返回结果即已上线。
+
+---
+
+## ⚠️ 本节踩过的坑（2026-07-15 实测）
+
+| 坑 | 现象 | 正解 |
+|---|---|---|
+| **包名错误** | `npm install -g @modelcontextprotocol/registry-publisher` → `404 Not Found`，随后 `zsh: command not found: mcp-publisher` | 官方**不发 npm**，用 `brew install mcp-publisher` 或预编译二进制 |
+| 误以为要发 npm 包 | 以为必须 `npm publish` 才能被收录 | **纯远程端点无需发包**，只需 `server.json` 里有 `remotes` |
+
+> **教训**：凡是「`npm install -g <包>`」形式的指引，先用
+> `curl -s https://registry.npmjs.org/<包名>/latest` 验证包是否存在，再让你执行。
+> 官方工具常以「源码构建 + 预编译二进制」方式分发，不一定上 npm。
 
 ---
 

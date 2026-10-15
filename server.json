@@ -1,6 +1,7 @@
 {
-  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-09-29/server.schema.json",
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.bruceonline2026/feedwatch",
+  "title": "FeedWatch",
   "description": "Monitor RSS/Atom/JSON feeds; alerts on new items AND edits to existing ones, with field-level diffs.",
   "version": "0.1.0",
   "websiteUrl": "https://api.tiici.com/",
@@ -8,13 +9,6 @@
     "url": "https://github.com/bruceonline2026/FeedWatch",
     "source": "github"
   },
-  "packages": [
-    {
-      "registryType": "npm",
-      "identifier": "feedwatch-mcp",
-      "version": "0.1.0"
-    }
-  ],
   "remotes": [
     {
       "type": "streamable-http",
