@@ -11,6 +11,7 @@
 
 | 你想了解 | 看这份 |
 |---|---|
+| **⭐ 现在什么状态、下一步做什么** | [📋 **工作计划与进展**](docs/工作计划与进展.md) |
 | **整个项目长什么样** | [📐 项目蓝图](docs/架构/项目蓝图.md) |
 | 开发要做什么 | [💻 软件开发需求说明书](docs/需求/软件开发需求说明书.md) |
 | 客户怎么用它 | [📖 用户说明书](docs/需求/用户说明书.md) |
@@ -133,50 +134,58 @@ HTTP        node:http 原生（零框架）
 
 ```
 06MCP/
-├── src/
-│   ├── server.js           HTTP 入口（REST + MCP），绑 127.0.0.1
-│   ├── service.js          调度 · 抓取 · 比对 · 推送 + MemoryStore
-│   ├── parser/feeds.js     三协议解析（RSS 2.0 / Atom 1.0 / JSON Feed）
-│   ├── diff/engine.js      ★ 哈希粗筛 + 字段级 diff（核心差异化）
-│   ├── notify/deliver.js   HMAC 签名 Webhook + 重试
-│   ├── security/ssrf.js    SSRF 防护 + DNS 钉 IP + 出站代理
-│   └── mcp/endpoint.js     MCP Streamable HTTP（3 工具）
-├── scripts/                测试脚本（6 套件，87 项）
-├── deploy/                 部署脚本
-│   ├── deploy-linux.sh     Linux 一键部署
-│   ├── *.cmd               Windows 部署脚本
-│   └── bind-cert-safe.ps1  加固版证书绑定
-├── docs/                   四层文档体系
-└── deliverables/gstack/    审查报告
+├── web/index.html         对外落地页（部署到 /）
+├── docs/
+│   ├── 工作计划与进展.md            ⭐ 当前状态 + 每日台账 + 下一步
+│   ├── 架构/项目蓝图.md                整体架构 + 外部资源 + 阶段路线
+│   ├── 需求/                          功能清单 + 实现状态 + 客户说明
+│   ├── 运营手册/                ⭐ 内部测试 / Key 管理 / MCP 发布 / 收款 / 部署
+│   ├── 决策/                      收款平台与主体决策（v2 含纠错）
+│   └── 复盘/                ⭐ 回归测试要求点 / 调试复盘 / 上线清单 / 状态语义
+├── src/                        7 模块 2242 行
+├── scripts/                    5 套件 + 1 真实源  1926 行 / 90+28 项断言
+├── deploy/                     Linux/Windows/落地页/云防火墙部署脚本
+├── server.json                 MCP 官方注册表清单
+├── smithery.yaml               Smithery 一键安装配置
+├── web/index.html              对外落地页
+└── deliverables/gstack/        审查与发布报告（不随仓库公开）
 ```
 
 ---
 
 ## 当前状态
 
+> 📋 **完整台账见 [`docs/工作计划与进展.md`](docs/工作计划与进展.md)**（每日工作 + 下一步 8 项）
+
 ### ✅ 已就绪
 
 ```
-源码        2143 行 / 7 模块
-测试        87 项离线全绿 + 27 项真实源通过
-安全        10 个缺陷全修 + 三层防护（云防火墙 / ufw / Nginx+TLS，3001 不暴露公网）
-服务器      Vultr 167.179.112.40 已部署（Tokyo / $5/月 / Ubuntu 24.04.5）
+产品        https://api.tiici.com/ 落地页 + REST API + MCP 端点，全部线上
+源码        2242 行 / 7 模块（零 Web 框架）
+测试        90 项离线全绿 + 28 项真实源全过= 1926 行 / 6 套件
+安全        13 个缺陷已修 12 个（每个都做回退证伪）+ 三层防护
+              云防火墙 / ufw / Nginx+TLS，3001 公网实测不可达
+服务器      Vultr 167.179.112.40（Tokyo / $5/月 / Ubuntu 24.04.5）
 运行        feedwatch.service active+enabled，Node v22.23.3，实测 RSS 93 MB
-证书        api.tiici.com 已签发（至2027-01-13，自动续期已 dry-run 验证）
-落地页      https://api.tiici.com/ 已上线（web/index.html，27 KB）
-部署脚本    Linux 一键部署 + 落地页部署 + 云防火墙 + Windows 部署 + 证书一键签发
-文档        四层体系 + 复盘 826 行
+证书        api.tiici.com 已签发（至 2027-01-13，自动续期 dry-run 已验证）
+配额        免费层 5 个监控点 / 6h 频率（**申报与实际强制一致**）
+分发        GitHub 公开仓库 + tag v0.1.0 + server.json 通过官方 validate
+依赖        fast-xml-parser 5.11.2（OSV 漏洞清零）
+文档        15 份（含回归测试要求点清单、API Key 管理、内部测试指南）
 ```
 
-### ⏳ 待办
+### ⏳ 待办（完整版见工作计划）
 
 | # | 事项 | 负责 | 阻塞什么 |
 |---|---|---|---|
-| 1 | Payoneer 个人账户 + 收款链接（**非 Checkout**）| 徐总 | 收款 |
-| 2 | 咨询税务师（第 3 周）| 徐总 | 后续合规 |
-| 3 | 免费层配额落地（当前上限 50，需降到 3）| 我 | 撞墙推销时机 |
-| 4 | TTL 调回 300 | 徐总 | — |
-| 5 | **www / game 证书续签** | 我 | ⚠️ **10-29 到期，10-23 前** |
+| 1 | **Payoneer 个人账户 + 收款链接**（⚠️ 非 Checkout）| 徐总 | 🔴 **收款前置条件** |
+| 2 | **修 D8**（客户可无限签发 Key）| 我 | 🔴 **发出第一把客户 Key 前** |
+| 3 | 提交 MCP 官方注册表 | 徐总 | 分发（`mcp-publisher publish`）|
+| 4 | 点 GitHub Release Publish | 徐总 | tag 已推送，只需点一下 |
+| 5 | Smithery / mcp.so / mcpservers.org | 徐总 | 各 3-5 分钟 |
+| 6 | 咨询税务师（第 3 周）| 徐总 | 后续合规 |
+| 7 | TTL 调回 300 | 徐总 | — |
+| 8 | **www / game 证书续签** | 我 | ⚠️ **10-29 到期，10-23 前** |
 
 **⏸️暂缓**：海外公司注册 —— 验证期不需要，**确定要接 Checkout 2.0 / Stripe 时再办**
 
