@@ -66,14 +66,14 @@ h1{font-size:clamp(30px,5vw,46px);line-height:1.18;font-weight:600;letter-spacin
 .pc{padding:26px 28px}
 .pc+.pc{border-left:1px solid var(--border)}
 .pc h3{font-size:14px;font-weight:600;margin-bottom:12px;display:flex;align-items:center;gap:8px}
-.pc.bad h3{color:var(--text-3)}
-.pc.good h3{color:var(--ok)}
+.pc.bad h3{color:var(--warn)}
+.pc.good h3{color:var(--ok);font-weight:700}
 .chg{font-family:var(--mono);font-size:12.5px;line-height:1.75;padding:9px 11px;border-radius:7px;margin-bottom:7px;overflow-x:auto;white-space:nowrap}
 .chg.rm{background:var(--warn-soft);color:var(--warn)}
 .chg.diff{background:var(--ok-soft);color:var(--ok)}
 .chg .del{text-decoration:line-through;opacity:.65}
 .chg .ins{font-weight:600;text-decoration:underline;text-underline-offset:2px}
-.chg .lbl{font-size:11px;opacity:.7;margin-right:6px}
+.chg .lbl{font-size:11px;opacity:.85;margin-right:6px;font-weight:600}
 
 /* sections */
 section{padding:66px 0;border-bottom:1px solid var(--border)}
@@ -101,7 +101,9 @@ h2{font-size:26px;font-weight:600;letter-spacing:-.01em;margin-bottom:12px}
 .cb-hd .tabs{margin-left:auto;display:flex;gap:4px}
 .tab{font-size:11.5px;padding:3px 9px;border-radius:5px;color:#9a9992;cursor:pointer;border:1px solid transparent;font-family:inherit}
 .tab.on{background:#2e2e2a;color:#e8e6e0;border-color:#3d3d38}
-pre{padding:18px 20px;overflow-x:auto;font-family:var(--mono);font-size:12.8px;line-height:1.75;color:var(--code-text)}
+pre{padding:18px 20px;overflow-x:auto;font-family:var(--mono);font-size:12.8px;line-height:1.75;color:var(--code-text);background:var(--code-bg);border:1px solid #2e2e2a;border-radius:var(--radius)}
+.codeblock pre{background:none;border:0;border-radius:0}
+.code{margin-top:4px}
 pre .c{color:#6f6e68}
 pre .k{color:#c2410c}
 pre .s{color:#0f6e56}

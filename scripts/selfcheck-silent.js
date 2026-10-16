@@ -107,18 +107,70 @@ console.log('\n\x1b[1m模式 ② 只声明不强制\x1b[0m \x1b[90m（声明 A�
     '定义了 KEY_ISSUE_MAX 但没调用 rateLimit() = 无限流');
 
   // ②-d  三处口径（页面/配置/接口）必须一致 —— 这是 E7 的教训
-  const pagePath = join(ROOT, 'web/index.html');
-  let pageMonitors = null;
-  try {
-    const page = readFileSync(pagePath, 'utf8');
-    const m = page.match(/(\d+)\s*个监控点/);
-    pageMonitors = m ? Number(m[1]) : null;
-  } catch { /* 页面不存在则跳过 */ }
+  const pageMonitors = [];
+  for (const f of ['web/zh.html', 'web/en.html']) {
+    try {
+      const page = readFileSync(join(ROOT, f), 'utf8');
+      const m = page.match(/(\d+)\s*个监控点/) ?? page.match(/(\d+)\s*monitors/);
+      pageMonitors.push({ file: f, n: m ? Number(m[1]) : null });
+    } catch { /* 页面不存在则跳过 */ }
+  }
 
   const codeDefault = Number((src.match(/MAX_MONITORS \?\? (\d+)/) ?? [])[1] ?? NaN);
+  const badPages = pageMonitors.filter(
+    (p) => p.n !== null && !Number.isNaN(codeDefault) && p.n !== codeDefault,
+  );
   check('只声明', '落地页声明的配额与代码默认值一致',
-    pageMonitors === null || Number.isNaN(codeDefault) || pageMonitors === codeDefault,
-    `页面写 ${pageMonitors ?? '（未找到）'}，代码默认 ${codeDefault} —— 两者必须相同`);
+    badPages.length === 0,
+    badPages.length
+      ? `${badPages.map((p) => `${p.file} 写 ${p.n}`).join('、')}，代码默认 ${codeDefault} —— 必须相同`
+      : `代码默认 ${codeDefault}，页面一致`);
+
+  // ②-e  HTML 用了的 class 必须在 CSS 里有定义
+  //
+  // 实测教训（2026-10-17）：英文页用 class="code" 包pre，
+  // 但 .code 这条规则**从未写进 CSS** —— pre 规则只设了浅色文字色，
+  // 背景色在 .codeblock 上，于是浅字落在浅底上，**代码块整块看不见**。
+  //
+  // 这是「只声明不强制」的第四种形态：
+  //   HTML 声明了样式来源 → CSS 里没有 → 静默失效，无报错、无日志
+  // 而且**两版页面都受影响**（同一份 CSS），
+  // 靠肉眼看截图才发现 —— 这正是它该被机械化检查的原因。
+  const undefinedClasses = [];
+  for (const f of ['web/zh.html', 'web/en.html']) {
+    let page = '';
+    try { page = readFileSync(join(ROOT, f), 'utf8'); } catch { continue; }
+    const css = (page.match(/<style>([\s\S]*?)<\/style>/) ?? [])[1] ?? '';
+    const used = new Set();
+    for (const m of page.matchAll(/class="([^"]+)"/g)) {
+      for (const c of m[1].split(/\s+/)) if (c) used.add(c);
+    }
+    const undef = [...used].filter(
+      (c) => !new RegExp(`\\.${c.replace(/[-]/g, '\\-')}(?![a-zA-Z0-9_-])`).test(css),
+    );
+    if (undef.length) undefinedClasses.push(`${f}: ${undef.join(', ')}`);
+  }
+  check('只声明', 'HTML 用到的 class 在 CSS 中都有定义',
+    undefinedClasses.length === 0,
+    undefinedClasses.length
+      ? `未定义 → ${undefinedClasses.join('；')} —— 该区块会静默失去样式`
+      : `两版页面所有 class 均已定义`);
+
+  // ②-f  pre 必须自带背景，不能依赖外层包装类
+  //
+  // 承接 ②-e：修复方式选的是「把背景加到 pre 上」而不是「补一条 .code 规则」，
+  // 因为前者对任何未来新增的 pre 都成立，后者只救当前这一处。
+  // 这条检查锁住这个选择 —— 防止后人把 pre 的背景删掉又变回隐形。
+  let preHasBg = false;
+  try {
+    const page = readFileSync(join(ROOT, 'web/en.html'), 'utf8');
+    const css = (page.match(/<style>([\s\S]*?)<\/style>/) ?? [])[1] ?? '';
+    const rule = (css.match(/^pre\{([^}]*)\}/m) ?? [])[1] ?? '';
+    preHasBg = /background\s*:/.test(rule);
+  } catch { /* 跳过 */ }
+  check('只声明', '代码块 pre 自带背景色（不依赖外层类）',
+    preHasBg,
+    'pre 无 background → 若外层包装类未定义，浅色代码文字落在浅色底上，整块不可读');
 }
 
 // ══════════════════════════════════════════════════════════════
