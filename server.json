@@ -12,7 +12,15 @@
   "remotes": [
     {
       "type": "streamable-http",
-      "url": "https://api.tiici.com/mcp"
+      "url": "https://api.tiici.com/mcp",
+      "headers": [
+        {
+          "name": "Authorization",
+          "description": "Bearer token，即你的 FeedWatch API Key（在 https://api.tiici.com/ 申请）。也可用 x-api-key 头。",
+          "isRequired": true,
+          "isSecret": true
+        }
+      ]
     }
   ],
   "tools": [

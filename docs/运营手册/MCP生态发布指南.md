@@ -192,3 +192,56 @@ curl -X POST https://api.tiici.com/mcp \
 
 > ⚠️ 注册表与目录的政策会变。提交时以各站当日要求为准。
 > 官方规范：https://github.com/modelcontextprotocol/registry
+
+
+---
+
+## 六、✅ 实际发布记录（2026-10-16 完成）
+
+**结果**：`io.github.bruceonline2026/feedwatch` v0.1.0 **已在官方注册表上线**
+（API 回读确认：https://registry.modelcontextprotocol.io/v0.1/servers?search=io.github.bruceonline2026/feedwatch）
+
+### 本次踩到的两个坑
+
+**坑 1：JWT 有效期很短，login 与 publish 必须连着做**
+
+```
+Error: 401 "token has invalid claims: token is expired"
+```
+
+登录后**约 1 小时内**必须完成 publish。分两次做（例如今天授权、明天发布）
+就会像这样失败。**正确做法：两个命令在同一个终端连着跑。**
+
+**坑 2：`mcp-publisher` 不发 npm，且我最初给错了包名**
+
+`npm install -g @modelcontextprotocol/registry-publisher` → 404（该包不存在）
+→ 正确：`brew install mcp-publisher` 或官方预编译二进制（本机Apple Silicon 无 brew，
+装到 `~/.local/bin`）。
+
+### 发现：注册表不显示 tools（不是问题）
+
+发布后回读记录里没有 `tools` 字段。**实测对照组：其他远程服务器也一样没有**
+（如 ac.inference.sh/mcp）→ 设计如此：客户端通过 `tools/list` 实时获取，
+不依赖注册表的静态描述。
+
+### 已补但未发布的改进
+
+`server.json` 增加了 `remotes[].headers` 声明鉴权头：
+
+```json
+"headers": [{
+  "name": "Authorization",
+  "description": "Bearer token，即你的 FeedWatch API Key…",
+  "isRequired": true,
+  "isSecret": true
+}]
+```
+
+**为什么重要**：没有它，用户从注册表看不到「需要API Key」。
+**但实际影响有限** —— 实测未认证请求返回
+`401 + WWW-Authenticate: Bearer realm="feedwatch"`，
+标准客户端会据此提示用户填 token。
+
+⚠️ **已发布版本的元数据不可修改**（`mcp-publisher status` 只支持
+active/deprecated/deleted），所以这条改进**要下个版本才生效**。
+当前 `server.json` 里的 headers 仅在下次publish 时提交。
