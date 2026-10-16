@@ -187,7 +187,8 @@ const warned = results.filter((r) => r.ok && VERBOSE);
 
 console.log(`\n${'─'.repeat(64)}`);
 if (failed.length === 0) {
-  console.log('\x1b[32m\x1b[1m✓ 全部通过\x1b[0m \x1b[90m（9 项检查）\x1b[0m');
+  // 数字取自results.length，不写死 —— 写死过一次（写 9，实际 12）
+  console.log(`\x1b[32m\x1b[1m✓ 全部通过\x1b[0m \x1b[90m（${results.length} 项检查）\x1b[0m`);
   console.log('\x1b[90m  注意：通过不等于「没漏洞」—— 只意味着这三类模式没被引入。\x1b[0m');
   console.log('\x1b[90m  新增功能时仍要做回退证伪：改回错误写法，看对应测试会不会红。\x1b[0m');
   process.exit(0);
