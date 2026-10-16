@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FeedWatch — RSS/Atom change monitoring API | Detect edits with field-level diffs</title>
+<meta name="description" content="Change monitoring API for RSS, Atom and JSON Feed. Unlike tools that only report new items, FeedWatch detects edits to existing items and reports field-level diffs. REST API and MCP Server.">
+<meta property="og:title" content="FeedWatch — Know when a feed changes, not just grows">
+<meta property="og:description" content="Most feed monitors only say a new item appeared. FeedWatch detects edits to existing items and reports field-level diffs.">
+<meta property="og:type" content="website">
+<link rel="alternate" hreflang="zh-CN" href="https://api.tiici.com/">
+<link rel="alternate" hreflang="en" href="https://api.tiici.com/en/">
+<link rel="canonical" href="https://api.tiici.com/en/">
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#fbfaf8; --surface:#fff; --surface-2:#f5f4f0;
+  --text:#1a1a18; --text-2:#5c5b56; --text-3:#8a8983;
+  --border:#e3e1db; --border-2:#cfccc4;
+  --accent:#c2410c; --accent-soft:#fff2e8; --accent-border:#fed7aa;
+  --ok:#0f6e56; --ok-soft:#e6f5ef;
+  --warn:#854f0b; --warn-soft:#fdf3e3;
+  --code-bg:#1c1c1a; --code-text:#e8e6e0;
+  --radius:12px;
+  --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+  --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,"PingFang SC","Microsoft YaHei",sans-serif;
+}
+html{scroll-behavior:smooth}
+body{font-family:var(--sans);background:var(--bg);color:var(--text);line-height:1.65;font-size:15px;-webkit-font-smoothing:antialiased}
+.wrap{max-width:1080px;margin:0 auto;padding:0 24px}
+a{color:var(--accent);text-decoration:none}
+a:hover{text-decoration:underline}
+code{font-family:var(--mono);font-size:.88em}
+
+/* header */
+header{position:sticky;top:0;z-index:50;background:rgba(251,250,248,.92);backdrop-filter:blur(8px);border-bottom:1px solid var(--border)}
+.hd{display:flex;align-items:center;gap:28px;height:60px}
+.logo{display:flex;align-items:center;gap:9px;font-weight:600;font-size:16px;color:var(--text)}
+.mark{width:24px;height:24px;border-radius:6px;background:var(--accent);display:grid;place-items:center;flex:none}
+.mark svg{width:14px;height:14px;stroke:#fff;stroke-width:2.2;fill:none}
+nav{margin-left:auto;display:flex;gap:24px;font-size:14px}
+nav a{color:var(--text-2)}
+nav a:hover{color:var(--text);text-decoration:none}
+.hd .cta{margin-left:8px}
+
+/* buttons */
+.btn{display:inline-flex;align-items:center;gap:6px;padding:9px 16px;border-radius:8px;font-size:14px;font-weight:500;border:1px solid transparent;cursor:pointer;font-family:inherit;transition:.15s}
+.btn-primary{background:var(--accent);color:#fff}
+.btn-primary:hover{background:#9a3412;text-decoration:none;color:#fff}
+.btn-ghost{border-color:var(--border-2);color:var(--text);background:transparent}
+.btn-ghost:hover{border-color:var(--text-3);text-decoration:none;color:var(--text)}
+.btn-lg{padding:12px 22px;font-size:15px}
+.btn-row{display:flex;gap:12px;flex-wrap:wrap;margin-top:26px}
+
+/* hero */
+.hero{padding:78px 0 66px;border-bottom:1px solid var(--border)}
+.badge{display:inline-flex;align-items:center;gap:7px;padding:5px 12px;border-radius:99px;font-size:12.5px;font-weight:500;background:var(--accent-soft);color:var(--accent);border:1px solid var(--accent-border)}
+.dot{width:6px;height:6px;border-radius:50%;background:currentColor;flex:none}
+h1{font-size:clamp(30px,5vw,46px);line-height:1.18;font-weight:600;letter-spacing:-.02em;margin:20px 0 0;max-width:17ch}
+.lede{font-size:17px;color:var(--text-2);margin-top:18px;max-width:60ch;line-height:1.7}
+.lede strong{color:var(--text);font-weight:500}
+
+/* problem */
+.prob{background:var(--surface-2);border-bottom:1px solid var(--border)}
+.pg{display:grid;grid-template-columns:1fr 1fr;gap:0;border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;background:var(--surface)}
+.pc{padding:26px 28px}
+.pc+.pc{border-left:1px solid var(--border)}
+.pc h3{font-size:14px;font-weight:600;margin-bottom:12px;display:flex;align-items:center;gap:8px}
+.pc.bad h3{color:var(--text-3)}
+.pc.good h3{color:var(--ok)}
+.chg{font-family:var(--mono);font-size:12.5px;line-height:1.75;padding:9px 11px;border-radius:7px;margin-bottom:7px;overflow-x:auto;white-space:nowrap}
+.chg.rm{background:var(--warn-soft);color:var(--warn)}
+.chg.diff{background:var(--ok-soft);color:var(--ok)}
+.chg .del{text-decoration:line-through;opacity:.65}
+.chg .ins{font-weight:600;text-decoration:underline;text-underline-offset:2px}
+.chg .lbl{font-size:11px;opacity:.7;margin-right:6px}
+
+/* sections */
+section{padding:66px 0;border-bottom:1px solid var(--border)}
+h2{font-size:26px;font-weight:600;letter-spacing:-.01em;margin-bottom:12px}
+.sub{color:var(--text-2);max-width:64ch;margin-bottom:34px;font-size:15.5px}
+
+/* features */
+.fg{display:grid;grid-template-columns:repeat(3,1fr);gap:1px;background:var(--border);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden}
+.fc{background:var(--surface);padding:24px}
+.fc h4{font-size:14.5px;font-weight:600;margin-bottom:7px}
+.fc p{font-size:13.5px;color:var(--text-2);line-height:1.6}
+.ic{width:30px;height:30px;border-radius:8px;background:var(--accent-soft);display:grid;place-items:center;margin-bottom:13px}
+.ic svg{width:16px;height:16px;stroke:var(--accent);stroke-width:1.9;fill:none}
+
+/* steps */
+.steps{display:grid;grid-template-columns:repeat(3,1fr);gap:26px}
+.step .n{width:26px;height:26px;border-radius:50%;background:var(--text);color:#fff;display:grid;place-items:center;font-size:13px;font-weight:600;margin-bottom:12px}
+.step h4{font-size:14.5px;font-weight:600;margin-bottom:6px}
+.step p{font-size:13.5px;color:var(--text-2)}
+
+/* code */
+.codeblock{background:var(--code-bg);border-radius:var(--radius);overflow:hidden;border:1px solid #2e2e2a}
+.cb-hd{display:flex;align-items:center;gap:6px;padding:10px 14px;border-bottom:1px solid #2e2e2a;background:#232320}
+.cb-hd .f{font-family:var(--mono);font-size:12px;color:#9a9992}
+.cb-hd .tabs{margin-left:auto;display:flex;gap:4px}
+.tab{font-size:11.5px;padding:3px 9px;border-radius:5px;color:#9a9992;cursor:pointer;border:1px solid transparent;font-family:inherit}
+.tab.on{background:#2e2e2a;color:#e8e6e0;border-color:#3d3d38}
+pre{padding:18px 20px;overflow-x:auto;font-family:var(--mono);font-size:12.8px;line-height:1.75;color:var(--code-text)}
+pre .c{color:#6f6e68}
+pre .k{color:#c2410c}
+pre .s{color:#0f6e56}
+pre .f{color:#7c7b74}
+.pane{display:none}
+.pane.on{display:block}
+
+/* usecases */
+.uc{display:grid;grid-template-columns:repeat(2,1fr);gap:1px;background:var(--border);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden}
+.uc-i{background:var(--surface);padding:22px 24px}
+.uc-i h4{font-size:14px;font-weight:600;margin-bottom:6px}
+.uc-i p{font-size:13.5px;color:var(--text-2);line-height:1.6}
+
+/* pricing */
+.pg2{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}
+.plan{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:22px 20px;display:flex;flex-direction:column}
+.plan.hot{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent)}
+.plan .tag{font-size:11px;font-weight:600;color:var(--accent);text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px}
+.plan .price{font-size:28px;font-weight:600;letter-spacing:-.02em}
+.plan .price span{font-size:13px;font-weight:400;color:var(--text-3)}
+.plan .desc{font-size:13px;color:var(--text-2);margin:7px 0 16px;min-height:38px}
+.plan ul{list-style:none;font-size:13px;margin-bottom:20px;flex:1}
+.plan li{padding:5px 0;color:var(--text-2);display:flex;gap:7px;align-items:flex-start;line-height:1.5}
+.plan li svg{width:14px;height:14px;stroke:var(--ok);stroke-width:2.4;fill:none;flex:none;margin-top:3px}
+.plan li.off{color:var(--text-3)}
+.plan li.off svg{stroke:var(--text-3);opacity:.4}
+.note{margin-top:20px;font-size:13px;color:var(--text-2);padding:14px 16px;background:var(--surface-2);border-radius:9px;border:1px solid var(--border)}
+.note strong{color:var(--text)}
+
+/* faq */
+.faq{max-width:760px}
+details{border-bottom:1px solid var(--border);padding:16px 0}
+summary{cursor:pointer;font-size:14.5px;font-weight:500;list-style:none;display:flex;justify-content:space-between;gap:16px;align-items:flex-start}
+summary::-webkit-details-marker{display:none}
+summary::after{content:"+";font-size:19px;font-weight:300;color:var(--text-3);flex:none;line-height:1.3}
+details[open] summary::after{content:"−"}
+details p{margin-top:11px;font-size:13.5px;color:var(--text-2);line-height:1.7;padding-right:24px}
+details code{background:var(--surface-2);padding:1.5px 5px;border-radius:4px;border:1px solid var(--border)}
+
+/* cta band */
+.band{background:var(--surface-2);text-align:center}
+.band h2{margin-bottom:10px}
+
+/* footer */
+footer{padding:34px 0;font-size:13px;color:var(--text-3)}
+.fd{display:flex;gap:22px;flex-wrap:wrap;align-items:center}
+.fd nav{margin:0;gap:20px;font-size:13px}
+.fd .sep{margin-left:auto}
+
+@media(max-width:880px){
+  .pg,.uc,.fg{grid-template-columns:1fr}
+  .pc+.pc{border-left:none;border-top:1px solid var(--border)}
+  .steps,.pg2{grid-template-columns:1fr 1fr}
+  nav{display:none}
+}
+@media(max-width:560px){
+  .steps,.pg2{grid-template-columns:1fr}
+  .wrap{padding:0 18px}
+  .hero{padding:52px 0 44px}
+  section{padding:46px 0}
+}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap hd">
+    <div class="logo">
+      <span class="mark"><svg viewBox="0 0 24 24"><path d="M4 12a8 8 0 018 8M4 6a14 14 0 0114 14"/><circle cx="5" cy="19" r="1.4" fill="#fff" stroke="none"/></svg></span>
+      FeedWatch
+    </div>
+    <nav>
+      <a href="#difference">Features</a>
+      <a href="#how">How it works</a>
+      <a href="#mcp">MCP</a>
+      <a href="#pricing">Pricing</a>
+      <a href="#faq">FAQ</a>
+    </nav>
+    <a href="#lang" class="btn btn-ghost cta" title="Switch to Chinese">中文</a>
+    <a href="https://api.tiici.com/health" class="btn btn-ghost" target="_blank" rel="noopener">Status</a>
+  </div>
+</header>
+
+<section class="hero">
+  <div class="wrap">
+    <span class="badge"><span class="dot"></span>Public beta · API is live</span>
+    <h1>Know when a feed <em>changes</em>, not just grows</h1>
+    <p class="lede">
+      Most monitoring tools can only tell you <strong>a new item appeared</strong>.
+      But a corrected typo, a quietly raised price, a reworded policy clause — these are
+      <strong>edits to existing items</strong>. They produce no new item, so they get missed.
+      FeedWatch detects them and reports <strong>field-level diffs</strong>.
+    </p>
+    <div class="btn-row">
+      <a href="#how" class="btn btn-primary btn-lg">Get an API key</a>
+      <a href="#mcp" class="btn btn-ghost btn-lg">Use via MCP</a>
+    </div>
+  </div>
+</section>
+
+<section class="prob">
+  <div class="wrap">
+    <div class="pg">
+      <div class="pc bad">
+        <h3>Monitors that only report additions</h3>
+        <div class="chg rm"><span class="lbl">Reported</span>no change</div>
+        <div class="chg rm"><span class="lbl">Reality</span>price $19.99 → <span class="del">$29.99</span></div>
+        <p style="font-size:13px;color:var(--text-2);margin-top:14px;line-height:1.6">
+          The item id never changed, but its content did. The tool only diffs the
+          <em>set</em> of ids, so it concludes &ldquo;no change&rdquo;.
+          No alert fires — for exactly the change you most needed to know about.
+        </p>
+      </div>
+      <div class="pc good">
+        <h3>FeedWatch</h3>
+        <div class="chg diff"><span class="lbl">price</span><span class="del">19.99</span> → <span class="ins">29.99</span></div>
+        <div class="chg diff"><span class="lbl">title</span><span class="del">Starter</span> → <span class="ins">Starter (New Pricing)</span></div>
+        <p style="font-size:13px;color:var(--text-2);margin-top:14px;line-height:1.6">
+          The item id is unchanged, the content is not. Item tracking is unaffected —
+          only the body of deeply nested content is skipped, by design.
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="how">
+  <div class="wrap">
+    <h2>Three steps to integrate</h2>
+    <p class="sub">Use the REST API or MCP — both run on the same core logic.</p>
+    <div class="steps">
+      <div class="step">
+        <div class="n">1</div>
+        <h4>Create a monitor</h4>
+        <p>Submit an RSS / Atom / JSON Feed URL and pick a check frequency (15 min / 1 h / 6 h).</p>
+      </div>
+      <div class="step">
+        <div class="n">2</div>
+        <h4>We fetch and diff on a schedule</h4>
+        <p>Each round starts with a hash prefilter — unchanged feeds cost nothing.
+            Only on a change do we diff field by field, so ordering jitter produces no false alarms.</p>
+      </div>
+      <div class="step">
+        <div class="n">3</div>
+        <h4>Changes are pushed</h4>
+        <p>Via signed webhook (HMAC, with retries), or straight to Slack / Discord.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="difference">
+  <div class="wrap">
+    <h2>Capabilities</h2>
+    <p class="sub">Everything below is live and verified in production — not a roadmap.</p>
+    <div class="fg">
+      <div class="fc">
+        <div class="ic"><svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10"/></svg></div>
+        <h4>Field-level diffs</h4>
+        <p>Six fields compared individually; changes push with old / new values.
+            Long bodies are sent as a hash plus a length delta.</p>
+      </div>
+      <div class="fc">
+        <div class="ic"><svg viewBox="0 0 24 24"><path d="M5 12a7 7 0 017 7M5 6a13 13 0 0113 13"/><circle cx="6" cy="18" r="1.3"/></svg></div>
+        <h4>Three protocols</h4>
+        <p>RSS 2.0 (including RDF), Atom 1.0 and JSON Feed 1.1 — auto-detected.</p>
+      </div>
+      <div class="fc">
+        <div class="ic"><svg viewBox="0 0 24 24"><path d="M12 3v18M3 12h18"/></svg></div>
+        <h4>REST + MCP</h4>
+        <p>Two entry points on one core, so the maintenance cost barely grows.</p>
+      </div>
+      <div class="fc">
+        <div class="ic"><svg viewBox="0 0 24 24"><path d="M9 12l2 2 4-4"/><rect x="4" y="5" width="16" height="14" rx="2"/></svg></div>
+        <h4>Signed webhooks</h4>
+        <p>HMAC-SHA256 signature header, with 3 automatic retries (1s / 5s / 15s backoff).</p>
+      </div>
+      <div class="fc">
+        <div class="ic"><svg viewBox="0 0 24 24"><path d="M4 7h16M4 12h10M4 17h7"/></svg></div>
+        <h4>Keyword filtering</h4>
+        <p>Only alert on items matching your keywords, in title or body.</p>
+      </div>
+      <div class="fc">
+        <div class="ic"><svg viewBox="0 0 24 24"><path d="M12 3l8 4v5c0 5-3.5 8-8 9-4.5-1-8-4-8-9V7z"/></svg></div>
+        <h4>SSRF hardening</h4>
+        <p>DNS pinning with per-hop revalidation. Private ranges and cloud metadata
+            addresses are rejected — for feed fetches and webhook delivery alike.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="mcp">
+  <div class="wrap">
+    <h2>MCP server</h2>
+    <p class="sub">Add it to Claude, Cursor, VS Code or Windsurf. Point your assistant at a feed and ask in plain English.</p>
+    <div class="code" id="code-mcp"><pre><code>{
+  "mcpServers": {
+    "feedwatch": {
+      "url": "https://api.tiici.com/mcp",
+      "headers": { "x-api-key": "&lt;your-key&gt;" }
+    }
+  }
+}</code></pre></div>
+    <p class="sub" style="margin-top:18px">Three tools: <code>create_monitor</code>, <code>list_monitors</code>, <code>check_feed</code>.</p>
+  </div>
+</section>
+
+<section id="pricing">
+  <div class="wrap">
+    <h2>Pricing</h2>
+    <p class="sub">Validation-stage pricing. Try the free tier until you hit the ceiling, then decide.</p>
+    <div class="pg2">
+      <div class="plan">
+        <div class="price">$0<span> /mo</span></div>
+        <div class="desc">Trials and personal projects</div>
+        <ul>
+          <li><svg viewBox="0 0 24 24"><path d="M5 12l5 5L20 7"/></svg>5 monitors</li>
+          <li><svg viewBox="0 0 24 24"><path d="M5 12l5 5L20 7"/></svg>Checked every 6 hours</li>
+          <li><svg viewBox="0 0 24 24"><path d="M5 12l5 5L20 7"/></svg>Webhook + Slack / Discord</li>
+          <li><svg viewBox="0 0 24 24"><path d="M5 12l5 5L20 7"/></svg>Field-level diffs</li>
+        </ul>
+        <a href="#how" class="btn btn-ghost" style="justify-content:center">Start free</a>
+      </div>
+      <div class="plan hot">
+        <div class="tag">Most popular</div>
+        <div class="price">$9<span> /mo</span></div>
+        <div class="desc">Small teams and solo developers</div>
+        <ul>
+          <li><svg viewBox="0 0 24 24"><path d="M5 12l5 5L20 7"/></svg>25 monitors</li>
+          <li><svg viewBox="0 0 24 24"><path d="M5 12l5 5L20 7"/></svg>Checked every hour</li>
+          <li><svg viewBox="0 0 24 24"><path d="M5 12l5 5L20 7"/></svg>Keyword filtering</li>
+          <li><svg viewBox="0 0 24 24"><path d="M5 12l5 5L20 7"/></svg>Field-level diffs</li>
+        </ul>
+        <a href="#how" class="btn btn-primary" style="justify-content:center">Upgrade to Starter</a>
+      </div>
+      <div class="plan">
+        <div class="price">$29<span> /mo</span></div>
+        <div class="desc">Production and higher frequency</div>
+        <ul>
+          <li><svg viewBox="0 0 24 24"><path d="M5 12l5 5L20 7"/></svg>100 monitors</li>
+          <li><svg viewBox="0 0 24 24"><path d="M5 12l5 5L20 7"/></svg>Checked every 15 minutes</li>
+          <li><svg viewBox="0 0 24 24"><path d="M5 12l5 5L20 7"/></svg>Everything in Starter</li>
+          <li><svg viewBox="0 0 24 24"><path d="M5 12l5 5L20 7"/></svg>Priority support</li>
+        </ul>
+        <a href="#how" class="btn btn-ghost" style="justify-content:center">Go Pro</a>
+      </div>
+    </div>
+    <p class="sub" style="margin-top:18px">
+      Exceeding the free monitor limit returns <code>429</code> with an upgrade hint.
+      <strong>Existing monitors keep running</strong> — the limit only blocks creating new ones.
+      No auto-charge, no auto-downgrade.
+    </p>
+  </div>
+</section>
+
+<section id="faq">
+  <div class="wrap">
+    <h2>FAQ</h2>
+    <div class="fg">
+      <div class="fc">
+        <h4>Do I need to host anything?</h4>
+        <p>No. One API key and you are done — RSS, Atom and JSON Feed all work.</p>
+      </div>
+      <div class="fc">
+        <h4>How noisy is it?</h4>
+        <p>A hash prefilter skips unchanged feeds entirely, and a second fetch of an
+            unchanged feed reports <code>changed: false</code>. Ordering jitter does not
+            count as a change.</p>
+      </div>
+      <div class="fc">
+        <h4>Do you store my data?</h4>
+        <p>Only a hash of each API key — plaintext is shown once at creation and never
+            written to disk. Feed bodies are processed in memory and discarded.</p>
+      </div>
+      <div class="fc">
+        <h4>What are the current limits?</h4>
+        <p>Monitors are held in memory during the validation stage, so a restart clears them.
+            Persistence arrives later.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap fd">
+    <span>© 2026 FeedWatch</span>
+    <nav>
+      <a href="https://api.tiici.com/health" target="_blank" rel="noopener">Status</a>
+      <a href="https://github.com/bruceonline2026/FeedWatch" target="_blank" rel="noopener">GitHub</a>
+      <a href="#pricing">Pricing</a>
+      <a href="/" lang="zh-CN">中文</a>
+    </nav>
+    <span class="sep">Running in Tokyo · api.tiici.com</span>
+  </div>
+</footer>
+
+</body>
+</html>
