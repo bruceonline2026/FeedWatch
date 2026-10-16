@@ -487,6 +487,62 @@ await t('引导密钥可进入鉴权区（无死锁）', async () => {
   return 'FEEDWATCH_BOOTSTRAP_KEY 生效';
 });
 
+// ══════════════════════════════════════════════════════════════
+// GET /mcp 说明页（2026-10-16 新增）
+//
+// 为什么要这一页：MCP 的 tools/list 走 POST，GET 本就不支持——
+// 但直接访问看到 {"error":"无此端点：GET /mcp"} 很像故障报告，
+// 而这个 URL 会被审核员、客户、以及以为服务坏了的人直接打开。
+// ══════════════════════════════════════════════════════════════
+
+await t('★ GET /mcp 返回说明页而非 404（人工访问体验）', async () => {
+  const r = await get('/mcp');
+  assert(r.status === 200, `GET /mcp 应 200，实际 ${r.status}：${r.text?.slice(0, 120)}`);
+  assert(/text\/html/.test(r.headers?.['content-type'] ?? ''),
+    `应返回 HTML，实际 content-type：${r.headers?.['content-type']}`);
+  assert(/MCP server endpoint/i.test(r.text), '页面应说明这是 MCP 端点');
+  // 必须含可直接复制的客户端配置
+  assert(/mcpServers/.test(r.text) && /api\.tiici\.com\/mcp/.test(r.text),
+    '页面应含可直接复制的 MCP 客户端配置');
+  // 必须列出三个工具
+  for (const tool of ['create_monitor', 'list_monitors', 'check_feed']) {
+    assert(r.text.includes(tool), `页面应提及工具 ${tool}`);
+  }
+  return 'GET 返回 HTML 说明页，含配置示例与三个工具名';
+});
+
+await t('★ GET /mcp 说明页不泄露任何敏感信息', async () => {
+  const r = await get('/mcp');
+  // 真实凭据绝不能出现在页面上
+  assert(!r.text.includes(AUTH.key), '★ 页面绝不能包含引导密钥明文');
+  assert(!/fw_[0-9a-f]{32}/.test(r.text), '★ 页面不能出现任何 API Key 形态的字符串');
+  // 内部实现细节也不该暴露
+  assert(!/FEEDWATCH_BOOTSTRAP_KEY|BOOTSTRAP_KEY|127\.0\.0\.1:3001/.test(r.text),
+    '页面不应暴露环境变量名或内部监听地址');
+  // 占位符必须明显是占位符。
+  // 注意：页面里 JSON 被做了 HTML 转义（< > & → &lt; &gt; &amp;），
+  // 所以这里比对转义后的形态 —— 转义本身正是防注入的一部分。
+  assert(/&lt;your-api-key&gt;/.test(r.text),
+    '应使用转义的占位符 <your-api-key>，而非真实 Key');
+  return '未泄露 Key / 环境变量名 / 内部端口，占位符已 HTML 转义';
+});
+
+await t('★ POST /mcp 仍要求鉴权（说明页不能削弱安全）', async () => {
+  // 加了 GET 说明页之后，POST 的鉴权绝不能被顺带放松
+  const resp = await fetch(B + '/mcp', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream' },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }),
+  });
+  const r = { status: resp.status, text: await resp.text(),
+              headers: Object.fromEntries(resp.headers) };
+  assert(r.status === 401,
+    `POST /mcp 无 Key 应仍 401，实际 ${r.status} —— 说明页的存在不能让鉴权放松`);
+  assert(/authorization|bearer|api-key/i.test(JSON.stringify(r.headers?.['www-authenticate'] ?? '') + r.text),
+    '401 应带 WWW-Authenticate 提示');
+  return 'POST 仍 401，且带 WWW-Authenticate';
+});
+
 await t('服务绑定 127.0.0.1 而非 0.0.0.0（安全要求）', async () => {
   assert(/listening on http:\/\/127\.0\.0\.1:3199/.test(serverOut),
     `应监听 127.0.0.1，实际日志：${serverOut.slice(0, 120)}`);

@@ -7,6 +7,7 @@
 import http from 'node:http';
 import { MemoryStore, MonitorService, checkOnce, INTERVALS } from './service.js';
 import { handleMcpRequest, serverManifest } from './mcp/endpoint.js';
+import { mcpInfoPage } from './mcp/info-page.js';
 import { isPrivateAddress } from './security/ssrf.js';
 
 const HOST = process.env.HOST ?? '127.0.0.1';
@@ -244,6 +245,20 @@ const server = http.createServer(async (req, res) => {
     }
 
     // ---------- MCP Streamable HTTP ----------
+    // ★ GET /mcp 返回说明页（2026-10-16 加）。
+    //   MCP 的 tools/list 走 JSON-RPC over POST，GET 本就不支持 ——
+    //   但直接访问看到 {"error":"无此端点：GET /mcp"} 很像故障报告。
+    //   而这个 URL 会被审核员、潜在客户、以及以为服务坏了的用户直接打开。
+    //   ⚠️ 放在鉴权之前是**刻意的**：说明页不含任何敏感信息，
+    //   不需要 Key 也能看到「怎么连」——这正是它的转化目的。
+    if (path === '/mcp' && req.method === 'GET') {
+      res.writeHead(200, {
+        'content-type': 'text/html; charset=utf-8',
+        'cache-control': 'public, max-age=3600',
+      });
+      return res.end(mcpInfoPage(version));
+    }
+
     if (path === '/mcp' && req.method === 'POST') {
       // ★ 上线前审计修复：此前 /mcp 完全无鉴权。
       //   实测匿名可 tools/list、create_monitor、list_monitors、check_feed，
