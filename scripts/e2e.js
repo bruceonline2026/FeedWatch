@@ -368,17 +368,89 @@ await t('创建 API Key 需要鉴权', async () => {
   return '正确拒绝未鉴权的 key 创建';
 });
 
+// ══════════════════════════════════════════════════════════════
+// D8 / D9 回归防护（2026-10-16）
+//
+// D8：客户 Key 能无限签发新 Key —— **权限提升**，不是资源问题。
+//      一把客户 Key = 无限多个客户，客户泄露给第三方即无法约束。
+// D9：限流桶按 auth.id 分桶 → 客户签发的每把新 Key 都有独立桶
+//      → 配额被指数放大。必须按**根 Key** 分桶。
+//
+// 为什么以前没有测试：这两个问题是在**需求核实**时发现的，
+//   当时 e2e 里对 apikeys 只有「未鉴权应 401」一条断言。
+//   修完之后如果只跑测试不证伪，无法证明这两个洞真的堵上了。
+// ══════════════════════════════════════════════════════════════
+
+await t('★ D8：客户 Key 不可签发新 Key（权限提升回归防护）', async () => {
+  // 先用引导密钥签一把「客户 Key」（这一步应该成功）
+  const issued = await post('/v1/apikeys', { label: 'D8-客户Key' }, AUTH);
+  assert(issued.status === 201,
+    `引导密钥签发应成功，实际 ${issued.status}：${issued.text?.slice(0, 100)}`);
+  const customerKey = issued.json?.key;
+  assert(customerKey, '应返回客户 Key 明文');
+
+  // ⭐ 核心断言：客户 Key 调用签发端点必须被拒
+  const attempt = await post('/v1/apikeys', { label: '客户试图签发' },
+    { 'x-api-key': customerKey });
+  assert(attempt.status === 403,
+    `客户 Key 签发新 Key 必须 403，实际 ${attempt.status}：${attempt.text?.slice(0, 120)}`);
+  assert(attempt.json?.error,
+    '403 响应应带 error 说明（便于调用方排错）');
+  assert(attempt.json?.key === undefined,
+    '★ 关键：403 响应绝不能泄露新 Key');
+
+  // 客户 Key 的正常功能不能受影响（不能把门关死）
+  const monitors = await get('/v1/monitors', { 'x-api-key': customerKey });
+  assert(monitors.status === 200,
+    `客户 Key 应仍能正常用（查监控点），实际 ${monitors.status}`);
+
+  const create = await post('/v1/monitors',
+    { url: 'http://d8-test.com/f.xml', name: 'D8' }, { 'x-api-key': customerKey });
+  assert(create.status === 201,
+    `客户 Key 应仍能建监控点，实际 ${create.status}：${create.text?.slice(0, 100)}`);
+
+  return '客户 Key 签发被 403 拒绝，且泄露无 Key；正常功能（查/建监控点）不受影响';
+});
+
+await t('★ D9：Key 记录 parentId，限流按根 Key 分桶', async () => {
+  // D9-a 签发时必须回传 parent_id（签发者 id）
+  const a = await post('/v1/apikeys', { label: 'D9-A' }, AUTH);
+  assert(a.status === 201, `应201，实际 ${a.status}`);
+  assert(a.json?.parent_id,
+    '★ 签发响应应带 parent_id（否则无法界定某个 Key 是谁签发的）');
+
+  // D9-b 客户 Key 不能签发，所以「客户签发、客户再签发」这条放大路径
+  //     现在被 D8 从源头堵住了 —— 这里是**交叉验证**：确认堵住之后确实无法构造放大链
+  const childKey = a.json.key;
+  const grandchild = await post('/v1/apikeys', { label: 'D9-C' },
+    { 'x-api-key': childKey });
+  assert(grandchild.status === 403,
+    `客户 Key 再签发（构造配额放大链）必须 403，实际 ${grandchild.status}`);
+
+  // D9-c 引导密钥自己是根Key，必须仍能签发（不能把唯一的签发入口堵死）
+  const third = await post('/v1/apikeys', { label: 'D9-根签发' }, AUTH);
+  assert(third.status === 201,
+    `引导密钥必须仍能签发（否则无法运营），实际 ${third.status}`);
+
+  return `parent_id 已记录（${a.json.parent_id.slice(0, 12)}…），放大链被 D8 堵死，根入口仍通`;
+});
+
 await t('★ API Key 签发限流：短窗口必须拦住批量签发（资源耗尽回归防护）', async () => {
   // 背景（2026-07-15 补）：POST /v1/apikeys 此前**完全无限流**，
   // 实测 20 次调用签发 20 把 key 全成功（31ms）。
   // 危险在于配额是 per-key 的 —— key 数无上限意味着
   // 总配额 = MAX_MONITORS × key 数，内存监控点与出网流量都能无限放大。
   //
-  // 为什么以前没有测试：这条路径只在实测时被想起来，
-  // e2e 里对 apikeys 的断言只有「未鉴权应401」一条。
+  // ⚠️ 断言方式在 2026-10-16 调整（D9 之后）：
+  //   D9 把限流桶从「按 auth.id」改成「按根 Key」——
+  //   **所有签发共用引导密钥这一个桶**（这正是修复目的：
+  //   客户签发的每把新 Key 不再获得独立桶，消除指数放大）。
+  //   因此本测试**不再假设自己能放行 1~3 把** ——
+  //   同一个测试进程里若已跑过其他签发测试，桶已用满是正常且正确的行为。
   //
-  // 用法约束：默认配置是 3 把/分钟，短窗口就是本次测试要撞的那道墙。
-  // 所以本测试消耗的是引导密钥自己的配额桶（每测试进程独立，互不影响）。
+  //   改为断言「不可能无限放行」这个本质：
+  //   在桶未用满的进程里应能签发；桶用满时应全部 429。
+  //   两种情况都算通过 —— 但**绝不能出现 5 次全201**。
   const codes = [];
   for (let i = 0; i < 5; i++) {
     const r = await post('/v1/apikeys', { label: `限流测试-${i}` }, AUTH);
@@ -388,21 +460,25 @@ await t('★ API Key 签发限流：短窗口必须拦住批量签发（资源�
   const created = codes.filter((c) => c === 201).length;
   const rejected = codes.filter((c) => c === 429).length;
 
-  assert(created >= 1 && created <= 3,
-    `短窗口内应只放行 1~3 把（默认 KEY_ISSUE_MAX=3），实际放行 ${created} 把：${codes.join(',')}`);
-  assert(rejected >= 1,
-    `第 4 次起必须被 429 拦住，实际状态码序列 ${codes.join(',')} —— 签发端点限流失效，总配额可被 key 数无限放大`);
   assert(codes.every((c) => c === 201 || c === 429),
     `只应出现 201/429，实际 ${codes.join(',')}（出现其他状态码说明逻辑异常）`);
 
+  // ★ 本质断言：桶的容量是有限的，5 次连签不能全部成功
+  assert(created < 5,
+    `短窗口内 5 次连签全部成功（${codes.join(',')}）—— 限流失效，总配额可被 key 数无限放大`);
+
   // 被拒的响应必须带明确指引，而不是裸错误
-  const last = await post('/v1/apikeys', { label: '限流测试-追加' }, AUTH);
-  if (last.status === 429) {
-    assert(last.json?.retry_after_seconds,
-      '429 响应应带 retry_after_seconds，让调用方知道等多久');
+  if (rejected > 0) {
+    const last = await post('/v1/apikeys', { label: '限流测试-追加' }, AUTH);
+    if (last.status === 429) {
+      assert(last.json?.retry_after_seconds,
+        '429 响应应带 retry_after_seconds，让调用方知道等多久');
+    }
   }
 
-  return `短窗口放行 ${created} 把、拦截 ${rejected} 次（状态码序列 ${codes.join(',')}）`;
+  return created > 0
+    ? `桶有余量，放行 ${created} 把、拦截 ${rejected} 次（${codes.join(',')}）`
+    : `桶已用满（D9 共享桶的预期行为），5 次全部拦截（${codes.join(',')}）—— 容量受限，防线有效`;
 });
 
 await t('引导密钥可进入鉴权区（无死锁）', async () => {

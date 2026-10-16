@@ -163,7 +163,7 @@ HTTP        node:http 原生（零框架）
 产品        https://api.tiici.com/ 落地页 + REST API + MCP 端点，全部线上
 源码        2242 行 / 7 模块（零 Web 框架）
 测试        90 项离线全绿 + 28 项真实源全过= 1926 行 / 6 套件
-安全        13 个缺陷已修 12 个（每个都做回退证伪）+ 三层防护
+安全        14 个缺陷已修 13 个（每个都做回退证伪）+ 三层防护
               云防火墙 / ufw / Nginx+TLS，3001 公网实测不可达
 服务器      Vultr 167.179.112.40（Tokyo / $5/月 / Ubuntu 24.04.5）
 运行        feedwatch.service active+enabled，Node v22.23.3，实测 RSS 93 MB
@@ -179,10 +179,9 @@ HTTP        node:http 原生（零框架）
 | # | 事项 | 负责 | 阻塞什么 |
 |---|---|---|---|
 | 1 | **Payoneer 个人账户 + 收款链接**（⚠️ 非 Checkout）| 徐总 | 🔴 **收款前置条件** |
-| 2 | **修 D8**（客户可无限签发 Key）| 我 | 🔴 **发出第一把客户 Key 前** |
-| 3 | 提交 MCP 官方注册表 | 徐总 | 分发（`mcp-publisher publish`）|
-| 4 | 点 GitHub Release Publish | 徐总 | tag 已推送，只需点一下 |
-| 5 | Smithery / mcp.so / mcpservers.org | 徐总 | 各 3-5 分钟 |
+| 2 | 提交 MCP 官方注册表 | 徐总 | 分发（`mcp-publisher publish`）|
+| 3 | 点 GitHub Release Publish | 徐总 | tag 已推送，只需点一下 |
+| 4 | Smithery / mcp.so / mcpservers.org | 徐总 | 各 3-5 分钟 |
 | 6 | 咨询税务师（第 3 周）| 徐总 | 后续合规 |
 | 7 | TTL 调回 300 | 徐总 | — |
 

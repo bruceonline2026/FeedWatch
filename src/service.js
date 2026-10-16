@@ -83,11 +83,30 @@ export class MemoryStore {
   /** ★ 删除监控点时一并回收快照，否则 snapshots Map 永久增长（内存泄漏） */
   deleteSnapshot(id) { return this.snapshots.delete(id); }
 
-  createApiKey(label) {
+  /**
+   * 签发一把 API Key。
+   *
+   * ⚠️ parentId（2026-10-16 补，D9）：
+   *   原本只记 { id, label, createdAt }，**不记是谁签发的**，
+   *   导致客户 Key 签出的 Key 与内部签出的在数据上完全无法区分，
+   *   配额也无法正确归属。追溯 parentId 链可解决这两点。
+   *
+   * @param {string} label     人读标签
+   * @param {object} [opts]
+   * @param {string} [opts.parentId]  签发者的 Key id；缺省视为引导密钥（根）
+   * @param {boolean} [opts.isBootstrap] 是否为引导密钥（根 Key，不可被吊销）
+   */
+  createApiKey(label, { parentId = null, isBootstrap = false } = {}) {
     const raw = `fw_${randomUUID().replace(/-/g, '')}`;
     const id = `key_${randomUUID().slice(0, 8)}`;
     const hash = createHash('sha256').update(raw).digest('hex');
-    this.apikeys.set(hash, { id, label: label ?? '', createdAt: new Date().toISOString() });
+    this.apikeys.set(hash, {
+      id,
+      label: label ?? '',
+      createdAt: new Date().toISOString(),
+      parentId,          // ← 签发者；null = 根 Key
+      isBootstrap,       // ← 仅引导密钥为 true，吊销时必须保护
+    });
     return { id, raw };
   }
 
@@ -97,13 +116,22 @@ export class MemoryStore {
    * 上线前审计修复：createApiKey 原本只能在需要鉴权的 /v1/apikeys 里调用，
    * 而该端点又要求已有 key —— 首次部署无法获得任何凭据，鉴权区形同虚设
    * （实际上会诱使人把 /mcp 也放开，那就成了匿名接口）。
+   *
+   * ⚠️ isBootstrap=true（D9）：引导密钥是**所有 Key 的根**，
+   *   既不能被吊销（否则把自己锁死），也是唯一允许签发 Key 的凭据（D8）。
    */
   seedApiKey(raw, label = 'bootstrap') {
     if (!raw || typeof raw !== 'string') return null;
     const hash = createHash('sha256').update(raw).digest('hex');
     if (this.apikeys.has(hash)) return null;
     const id = `key_${randomUUID().slice(0, 8)}`;
-    this.apikeys.set(hash, { id, label, createdAt: new Date().toISOString() });
+    this.apikeys.set(hash, {
+      id,
+      label,
+      createdAt: new Date().toISOString(),
+      parentId: null,     // 根
+      isBootstrap: true,  // ← 保护标记
+    });
     return { id };
   }
 
@@ -111,6 +139,33 @@ export class MemoryStore {
     if (!raw) return null;
     const hash = createHash('sha256').update(raw).digest('hex');
     return this.apikeys.get(hash) ?? null;
+  }
+
+  /**
+   * 追溯到根 Key 的 id（D9）。
+   *
+   * 为什么需要：限流桶若按「当前 Key」分桶，客户用 Key A 签出 B、
+   * 再用 B 签出 C…，每个新 Key 都有独立桶 → **配额被指数放大**。
+   * 按根 Key 分桶后，无论客户怎么签发，都共用同一个桶。
+   *
+   * 引导密钥自身即根（parentId 为 null）。
+   * 防御：链路最多回溯 16 层（防环形引用导致死循环），
+   * 遇到断链（parentId 指向不存在的 Key）时以当前 Key 为根，不抛错。
+   */
+  resolveRootKeyId(keyId) {
+    let cur = keyId;
+    for (let i = 0; i < 16; i++) {
+      const rec = this.findApiKeyById(cur);
+      if (!rec || !rec.parentId) return cur;   // 自己是根，或断链
+      cur = rec.parentId;
+    }
+    return cur;
+  }
+
+  /** 按 id 查 Key 记录（明文不可得，只返回元信息） */
+  findApiKeyById(keyId) {
+    for (const rec of this.apikeys.values()) if (rec.id === keyId) return rec;
+    return null;
   }
 
   /** 按归属统计监控点数量 */

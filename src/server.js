@@ -300,20 +300,38 @@ const server = http.createServer(async (req, res) => {
     if (!auth) return err(res, 401, '缺少或无效的 API Key（请用 x-api-key 头）');
 
     if (path === '/v1/apikeys' && req.method === 'POST') {
-      // ── 两层限流（2026-07-15 补）──
-      // 原实现此处**完全无限流**：实测 20 次调用签发 20 把 key 全成功（31ms）。
-      // 危险在于配额是 per-key 的 —— key 数无上限意味着
-      // 总配额 = MAX_MONITORS × key 数，内存监控点与出网流量都能无限放大。
+      // ══ D8：签发仅限引导密钥（2026-10-16 补）══
       //
-      // 第一层：滑动窗口，防单账号短时间批量签发（防脚本刷）
-      if (!rateLimit(`apikey:${auth.id}`, { windowMs: KEY_ISSUE_WINDOW_MS, max: KEY_ISSUE_MAX })) {
+      // 原实现只校验「有没有 Key」，**不校验「这Key 是不是引导密钥」**。
+      // 设计意图是「内部用引导密钥签发 → 发给客户 → 客户只用来建监控点」，
+      // 但客户拿你发的 Key 同样能无限签发新 Key ——
+      // 这等于把「一个客户」变成「无限多个客户」：配额空间可被无限复制。
+      //
+      // 客户 Key 泄露给第三方时，第三方就能自行签发，
+      // 而受害者**无法只吊销那把泄露的 Key**（当前也无吊销能力）。
+      if (!auth.isBootstrap) {
+        //刻意返回 403 而非 404：这是「权限不足」而非「资源不存在」，
+        //   403 便于调用方排错（404 会让人误以为端点不存在）。
+        //   这与监控点跨租户访问返回 404 的约定不同，属刻意例外。
+        return err(res, 403, 'API Key 签发仅限内部凭据，客户 Key 不可调用此端点', {
+          hint: '如需更多 Key 请联系我们',
+        });
+      }
+
+      // ── 以下限流（D4）按**根 Key** 分桶（D9）──
+      // 客户若能签发，每把新 Key 都有独立 auth.id → 按 auth.id 分桶会被指数放大。
+      // 按根 Key 分桶后，无论怎么签发都共用同一个桶。
+      const rootId = store.resolveRootKeyId(auth.id);
+
+      // 第一层：滑动窗口，防单账号短时间批量签发
+      if (!rateLimit(`apikey:${rootId}`, { windowMs: KEY_ISSUE_WINDOW_MS, max: KEY_ISSUE_MAX })) {
         return err(res, 429, `API Key 签发过于频繁，每 ${KEY_ISSUE_WINDOW_MS / 60000} 分钟最多 ${KEY_ISSUE_MAX} 把`, {
           retry_after_seconds: KEY_ISSUE_WINDOW_MS / 1000,
         });
       }
 
-      // 第二层：日配额，防跨天持续刷（窗口长到滑动窗口拦不住）
-      if (!rateLimit(`apikey-day:${auth.id}`, { windowMs: KEY_ISSUE_DAY_MS, max: KEY_ISSUE_DAILY_MAX })) {
+      // 第二层：日配额，防跨天持续刷
+      if (!rateLimit(`apikey-day:${rootId}`, { windowMs: KEY_ISSUE_DAY_MS, max: KEY_ISSUE_DAILY_MAX })) {
         return err(res, 429, `API Key 日签发上限 ${KEY_ISSUE_DAILY_MAX} 把，已达上限`, {
           retry_after_seconds: KEY_ISSUE_DAY_MS / 1000,
           hint: '若需更多 Key 请联系（当前每客户一把，泄露只影响单个客户）',
@@ -323,12 +341,13 @@ const server = http.createServer(async (req, res) => {
       const raw = await readBody(req);
       let label = 'default';
       try { label = JSON.parse(raw || '{}').label ?? 'default'; } catch { /* ignore */ }
-      const k = store.createApiKey(String(label).slice(0, 60));
+      const k = store.createApiKey(String(label).slice(0, 60), { parentId: auth.id });
       return json(res, 201, {
         id: k.id,
         key: k.raw,
         note: '此明文仅显示一次，请立即保存',
-        remaining_today: `${KEY_ISSUE_DAILY_MAX - rateLimitPeek(`apikey-day:${auth.id}`)} 把`,
+        parent_id: auth.id,
+        remaining_today: `${KEY_ISSUE_DAILY_MAX - rateLimitPeek(`apikey-day:${rootId}`)} 把`,
       });
     }
 
