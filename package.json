@@ -26,12 +26,13 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
-    "test": "node scripts/selftest.js && node scripts/regression.js && node scripts/regression-functional.js && node scripts/regression-scheduler.js && node scripts/e2e.js",
+    "test": "node scripts/selfcheck-silent.js && node scripts/selftest.js && node scripts/regression.js && node scripts/regression-functional.js && node scripts/regression-scheduler.js && node scripts/e2e.js",
     "test:live": "env -u HTTP_PROXY -u HTTPS_PROXY -u http_proxy -u https_proxy node scripts/livefeed-test.js",
     "selftest": "node scripts/selftest.js",
     "regression": "node scripts/regression.js",
     "e2e": "node scripts/e2e.js",
-    "connectivity": "node deploy/connectivity-probe.mjs"
+    "connectivity": "node deploy/connectivity-probe.mjs",
+    "check:patterns": "node scripts/selfcheck-silent.js --verbose"
   },
   "engines": {
     "node": ">=20"
