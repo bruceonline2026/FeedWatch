@@ -368,6 +368,43 @@ await t('创建 API Key 需要鉴权', async () => {
   return '正确拒绝未鉴权的 key 创建';
 });
 
+await t('★ API Key 签发限流：短窗口必须拦住批量签发（资源耗尽回归防护）', async () => {
+  // 背景（2026-07-15 补）：POST /v1/apikeys 此前**完全无限流**，
+  // 实测 20 次调用签发 20 把 key 全成功（31ms）。
+  // 危险在于配额是 per-key 的 —— key 数无上限意味着
+  // 总配额 = MAX_MONITORS × key 数，内存监控点与出网流量都能无限放大。
+  //
+  // 为什么以前没有测试：这条路径只在实测时被想起来，
+  // e2e 里对 apikeys 的断言只有「未鉴权应401」一条。
+  //
+  // 用法约束：默认配置是 3 把/分钟，短窗口就是本次测试要撞的那道墙。
+  // 所以本测试消耗的是引导密钥自己的配额桶（每测试进程独立，互不影响）。
+  const codes = [];
+  for (let i = 0; i < 5; i++) {
+    const r = await post('/v1/apikeys', { label: `限流测试-${i}` }, AUTH);
+    codes.push(r.status);
+  }
+
+  const created = codes.filter((c) => c === 201).length;
+  const rejected = codes.filter((c) => c === 429).length;
+
+  assert(created >= 1 && created <= 3,
+    `短窗口内应只放行 1~3 把（默认 KEY_ISSUE_MAX=3），实际放行 ${created} 把：${codes.join(',')}`);
+  assert(rejected >= 1,
+    `第 4 次起必须被 429 拦住，实际状态码序列 ${codes.join(',')} —— 签发端点限流失效，总配额可被 key 数无限放大`);
+  assert(codes.every((c) => c === 201 || c === 429),
+    `只应出现 201/429，实际 ${codes.join(',')}（出现其他状态码说明逻辑异常）`);
+
+  // 被拒的响应必须带明确指引，而不是裸错误
+  const last = await post('/v1/apikeys', { label: '限流测试-追加' }, AUTH);
+  if (last.status === 429) {
+    assert(last.json?.retry_after_seconds,
+      '429 响应应带 retry_after_seconds，让调用方知道等多久');
+  }
+
+  return `短窗口放行 ${created} 把、拦截 ${rejected} 次（状态码序列 ${codes.join(',')}）`;
+});
+
 await t('引导密钥可进入鉴权区（无死锁）', async () => {
   const r = await get('/v1/monitors', AUTH);
   assert(r.status === 200, `应 200，实际 ${r.status}`);

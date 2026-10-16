@@ -37,6 +37,22 @@ const CREATE_WINDOW_MS = 60_000;
 const CREATE_MAX = 10;
 
 /**
+ * API Key 签发限流（2026-07-15 补，此前该端点**完全无限流**）。
+ *
+ * 为什么需要两层：
+ * · 滑动窗口（KEY_ISSUE_MAX / 分钟）防单账号被脚本批量刷
+ * · 日配额（KEY_ISSUE_DAILY_MAX）防跨天持续累积 —— 窗口短到拦不住
+ *
+ * 为什么上限设这么低：配额是 per-key 的，总配额 = MAX_MONITORS × key 数。
+ * key 无上限 = 内存监控点、定时器、出网流量全部无上限放大。
+ * 业务口径是「每客户一把 Key，泄露只影响单个客户」，5 把足够内部运营使用。
+ */
+const KEY_ISSUE_WINDOW_MS = 60_000;
+const KEY_ISSUE_MAX = 3;
+const KEY_ISSUE_DAY_MS = 24 * 3600 * 1000;
+const KEY_ISSUE_DAILY_MAX = 20;
+
+/**
  * 允许跨域访问的来源白名单。
  *
  * 上线前审计修复：原先无条件返回 `access-control-allow-origin: *`，
@@ -149,15 +165,32 @@ function rateLimit(key, { windowMs, max }) {
   return true;
 }
 
-/** 定期清理过期的限流桶，防止 key 空间被无限撑大（内存泄漏） */
+/**
+ * 只读当前窗口内的命中数，不消耗配额。
+ * 用于在响应里如实告知「今天还剩几把」—— 不做这个的话，
+ * 调用方只能靠反复试错来推断剩余量（试到 429 才知道用完了）。
+ */
+function rateLimitPeek(key) {
+  const now = Date.now();
+  return (buckets.get(key) ?? []).filter((t) => now - t < KEY_ISSUE_DAY_MS).length;
+}
+
+/**
+ * 定期清理过期的限流桶，防止 key 空间被无限撑大（内存泄漏）。
+ *
+ * ⚠️ 清理阈值必须取**所有窗口的最大值**，不能用 CREATE_WINDOW_MS——
+ * 日配额桶的寿命是 24 小时，若按 60 秒清理，配额会在一天内被清空，
+ * 攻击者只要等过清理周期就能绕过上限（限流形同虚设）。
+ */
+const SWEEP_MS = KEY_ISSUE_DAY_MS;
 const sweep = setInterval(() => {
   const now = Date.now();
   for (const [k, hits] of buckets) {
-    const live = hits.filter((t) => now - t < CREATE_WINDOW_MS);
+    const live = hits.filter((t) => now - t < SWEEP_MS);
     if (live.length === 0) buckets.delete(k);
     else buckets.set(k, live);
   }
-}, CREATE_WINDOW_MS);
+}, Math.max(SWEEP_MS, CREATE_WINDOW_MS));
 sweep.unref?.();
 
 /** 取客户端标识，用于限流分桶 */
@@ -267,11 +300,36 @@ const server = http.createServer(async (req, res) => {
     if (!auth) return err(res, 401, '缺少或无效的 API Key（请用 x-api-key 头）');
 
     if (path === '/v1/apikeys' && req.method === 'POST') {
+      // ── 两层限流（2026-07-15 补）──
+      // 原实现此处**完全无限流**：实测 20 次调用签发 20 把 key 全成功（31ms）。
+      // 危险在于配额是 per-key 的 —— key 数无上限意味着
+      // 总配额 = MAX_MONITORS × key 数，内存监控点与出网流量都能无限放大。
+      //
+      // 第一层：滑动窗口，防单账号短时间批量签发（防脚本刷）
+      if (!rateLimit(`apikey:${auth.id}`, { windowMs: KEY_ISSUE_WINDOW_MS, max: KEY_ISSUE_MAX })) {
+        return err(res, 429, `API Key 签发过于频繁，每 ${KEY_ISSUE_WINDOW_MS / 60000} 分钟最多 ${KEY_ISSUE_MAX} 把`, {
+          retry_after_seconds: KEY_ISSUE_WINDOW_MS / 1000,
+        });
+      }
+
+      // 第二层：日配额，防跨天持续刷（窗口长到滑动窗口拦不住）
+      if (!rateLimit(`apikey-day:${auth.id}`, { windowMs: KEY_ISSUE_DAY_MS, max: KEY_ISSUE_DAILY_MAX })) {
+        return err(res, 429, `API Key 日签发上限 ${KEY_ISSUE_DAILY_MAX} 把，已达上限`, {
+          retry_after_seconds: KEY_ISSUE_DAY_MS / 1000,
+          hint: '若需更多 Key 请联系（当前每客户一把，泄露只影响单个客户）',
+        });
+      }
+
       const raw = await readBody(req);
       let label = 'default';
       try { label = JSON.parse(raw || '{}').label ?? 'default'; } catch { /* ignore */ }
       const k = store.createApiKey(String(label).slice(0, 60));
-      return json(res, 201, { id: k.id, key: k.raw, note: '此明文仅显示一次，请立即保存' });
+      return json(res, 201, {
+        id: k.id,
+        key: k.raw,
+        note: '此明文仅显示一次，请立即保存',
+        remaining_today: `${KEY_ISSUE_DAILY_MAX - rateLimitPeek(`apikey-day:${auth.id}`)} 把`,
+      });
     }
 
     if (path === '/v1/monitors' && req.method === 'GET') {
