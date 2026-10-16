@@ -185,18 +185,11 @@ HTTP        node:http 原生（零框架）
 | 5 | Smithery / mcp.so / mcpservers.org | 徐总 | 各 3-5 分钟 |
 | 6 | 咨询税务师（第 3 周）| 徐总 | 后续合规 |
 | 7 | TTL 调回 300 | 徐总 | — |
-| 8 | **www / game 证书续签** | 我 | ⚠️ **10-29 到期，10-23 前** |
 
 **⏸️暂缓**：海外公司注册 —— 验证期不需要，**确定要接 Checkout 2.0 / Stripe 时再办**
 
-⚠️ **紧急**：www.tiici.com 与 game.tiici.com 证书 **2026-10-29 到期**，
-需在 **10-23 前**用一键工具续发：
-```bash
-PY=/Users/jiayongxu/.workbuddy/binaries/python/envs/default/bin/python3
-S=~/.workbuddy/skills/iis-acme-cert/scripts/iis_cert.py
-$PY $S --host 47.116.215.156 --user nadmin --domain game.tiici.com \
-       --site WordMaster --webroot 'C:\WebServer\单词大师\前端'
-```
+> 📌 **不在本项目范围**：www.tiici.com / game.tiici.com 的证书续签属于
+> WordMaster 等其他站点，归各自项目台账管理，本台账不跟进。
 
 ---
 
