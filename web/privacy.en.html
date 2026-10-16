@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Privacy Policy — FeedWatch</title>
+<meta name="description" content="FeedWatch privacy policy: API keys are stored as SHA-256 hashes and never in plaintext, feed content is processed in memory and never written to disk.">
+<link rel="canonical" href="https://api.tiici.com/privacy">
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#fbfaf8; --surface:#fff; --surface-2:#f5f4f0;
+  --text:#1a1a18; --text-2:#5c5b56; --text-3:#8a8983;
+  --border:#e3e1db; --border-2:#cfccc4;
+  --accent:#c2410c; --accent-soft:#fff2e8; --accent-border:#fed7aa;
+  --ok:#0f6e56; --ok-soft:#e6f5ef;
+  --code-bg:#1c1c1a; --code-text:#e8e6e0;
+  --radius:12px;
+  --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+  --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+}
+body{font-family:var(--sans);background:var(--bg);color:var(--text);line-height:1.65;font-size:15px;-webkit-font-smoothing:antialiased}
+.wrap{max-width:760px;margin:0 auto;padding:0 24px}
+a{color:var(--accent);text-decoration:none}
+a:hover{text-decoration:underline}
+code{font-family:var(--mono);font-size:.88em}
+header{position:sticky;top:0;z-index:50;background:rgba(251,250,248,.92);backdrop-filter:blur(8px);border-bottom:1px solid var(--border)}
+.hd{display:flex;align-items:center;gap:24px;height:60px}
+.logo{display:flex;align-items:center;gap:9px;font-weight:600;font-size:16px}
+.mark{width:24px;height:24px;border-radius:6px;background:var(--accent);display:grid;place-items:center;flex:none}
+.mark svg{width:14px;height:14px;stroke:#fff;stroke-width:2.2;fill:none}
+nav{margin-left:auto;display:flex;gap:20px;font-size:14px}
+nav a{color:var(--text-2)}
+nav a:hover{color:var(--text);text-decoration:none}
+main{padding:52px 0 72px}
+h1{font-size:32px;line-height:1.25;letter-spacing:-.02em;margin-bottom:10px}
+.lede{color:var(--text-2);font-size:17px;margin-bottom:34px}
+h2{font-size:19px;margin:34px 0 12px;letter-spacing:-.01em}
+h3{font-size:16px;margin:22px 0 8px}
+p{margin-bottom:13px}
+ul,ol{margin:0 0 14px 22px}
+li{margin-bottom:6px}
+.updated{color:var(--text-3);font-size:13.5px;margin-bottom:30px;padding-bottom:20px;border-bottom:1px solid var(--border)}
+.callout{background:var(--ok-soft);border:1px solid #b8e0d0;border-radius:var(--radius);padding:16px 18px;margin:22px 0}
+.callout p:last-child{margin-bottom:0}
+.callout strong{color:var(--ok)}
+.note{background:var(--surface-2);border-left:3px solid var(--border-2);padding:12px 16px;margin:18px 0;color:var(--text-2);font-size:14.5px;border-radius:0 6px 6px 0}
+table{width:100%;border-collapse:collapse;margin:18px 0;font-size:14.5px}
+th,td{text-align:left;padding:10px 12px;border-bottom:1px solid var(--border)}
+th{font-weight:600;color:var(--text-2);font-size:13.5px;text-transform:uppercase;letter-spacing:.03em}
+td code{background:var(--surface-2);padding:2px 6px;border-radius:4px;font-size:13px}
+footer{border-top:1px solid var(--border);padding:24px 0;color:var(--text-3);font-size:13.5px}
+.fd{display:flex;gap:20px;flex-wrap:wrap;align-items:center}
+.fd nav{margin-left:auto}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap hd">
+    <div class="logo">
+      <span class="mark"><svg viewBox="0 0 24 24"><path d="M4 12a8 8 0 018 8M4 6a14 14 0 0114 14"/><circle cx="5" cy="19" r="1.4" fill="#fff" stroke="none"/></svg></span>
+      FeedWatch
+    </div>
+    <nav>
+      <a href="/">Home</a>
+      <a href="/refund">Refund</a>
+      <a href="/zh/">中文</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+<div class="wrap">
+  <h1>Privacy Policy</h1>
+  <p class="lede">Short version: your API key is stored only as a hash, your feed content is processed in memory and never written to disk, and we do not sell or share your data with anyone.</p>
+  <p class="updated">Last updated: 16 October 2026</p>
+
+  <div class="callout">
+    <p><strong>What we actually keep:</strong> a SHA-256 hash of your API key, the monitor URLs you gave us, your plan tier, and error messages from failed fetches. Everything lives in memory on our server.</p>
+  </div>
+
+  <h2>What we store, and for how long</h2>
+  <table>
+    <tr><th>Data</th><th>Form</th><th>Kept for</th></tr>
+    <tr><td>API key</td><td><strong>SHA-256 hash only</strong> — the plaintext is shown once at creation and never written anywhere</td><td>Until you delete the key or the service restarts</td></tr>
+    <tr><td>Monitor URLs</td><td>Plaintext, in memory</td><td>Until you delete the monitor</td></tr>
+    <tr><td>Feed content</td><td><strong>Never stored</strong> — parsed in memory, diffed, then discarded</td><td>Seconds</td></tr>
+    <tr><td>Detected changes</td><td>Delivered to your webhook, then discarded</td><td>Seconds</td></tr>
+    <tr><td>Error messages</td><td>Plaintext, in memory (e.g. &ldquo;upstream returned HTTP 403&rdquo;)</td><td>Until the next successful check</td></tr>
+    <tr><td>Server access logs</td><td>Request path, status, IP, timestamp — <strong>no request bodies</strong></td><td>As configured on the host</td></tr>
+  </table>
+
+  <h2>Three things worth calling out</h2>
+
+  <h3>Your API key is never stored in plaintext</h3>
+  <p>When you create a key, the response contains it <strong>exactly once</strong>.
+     From then on we keep only <code>SHA-256(key)</code> and compare against that.
+     Even someone with full read access to our server&rsquo;s memory cannot
+     reconstruct your key from what we hold.</p>
+  <p>The trade-off is honest: <strong>we cannot show you a lost key</strong>, and we
+     cannot email it back to you. If you lose it, you create a new one.</p>
+
+  <h3>Feed content is not written to disk</h3>
+  <p>When we check a feed, the response body is parsed in memory, compared against
+     the previous snapshot, and dropped. There is no database, no file, no cache.
+     We do not build a shadow copy of the internet.</p>
+
+  <h3>Monitors do not survive a restart — which cuts both ways</h3>
+  <p>Because everything is in memory, a restart clears all monitors and keys.
+     That is good for privacy and bad for reliability. Persistent storage is planned
+     for the next version; when it arrives, this policy will change and you will be
+     told before it does.</p>
+
+  <h2>What we send to third parties</h2>
+  <table>
+    <tr><th>Party</th><th>When</th><th>What is shared</th></tr>
+    <tr><td>The feed you monitor</td><td>Each check</td><td>Standard HTTP request metadata — your API key is never sent onward</td></tr>
+    <tr><td>Your webhook URL</td><td>When a change is detected</td><td>The change payload plus an HMAC signature</td></tr>
+    <tr><td>Slack / Discord</td><td>If you enable it</td><td>Only the message you configured</td></tr>
+  </table>
+  <p>We do not use advertising networks, analytics trackers, or third-party data brokers.</p>
+
+  <h2>Payments</h2>
+  <p>Payments are handled entirely by our payment provider. We receive confirmation
+     that a charge succeeded and the plan that was bought — <strong>never your full
+     card or bank details</strong>.</p>
+
+  <h2>Security measures</h2>
+  <ul>
+    <li>Webhooks carry an <strong>HMAC-SHA256 signature</strong> so you can verify we
+        sent the payload, and can reject anything forged.</li>
+    <li>The Node service binds to <code>127.0.0.1</code> only; TLS terminates at the reverse proxy.</li>
+    <li>All outbound fetches go through an <strong>SSRF guard</strong> with DNS pinning
+        and per-hop revalidation, so the service cannot be used to reach private
+        networks or cloud metadata endpoints.</li>
+    <li>Feed bodies are capped at 10 MB, and XML entity expansion is structurally
+        bounded.</li>
+  </ul>
+
+  <h2>Your rights</h2>
+  <p>You can, at any time:</p>
+  <ul>
+    <li>Delete any monitor you created</li>
+    <li>Ask what data we hold about you — and the answer will be short, because there isn&rsquo;t much</li>
+    <li>Request deletion of your account data</li>
+  </ul>
+  <p>Because everything is in memory and there is no database, deleting your account
+     is effectively a restart plus invalidating your key. We will do it for you on request.</p>
+
+  <h2>Children</h2>
+  <p>FeedWatch is a developer tool and is not directed at anyone under 16. We do not
+     knowingly collect information from children.</p>
+
+  <h2>Changes</h2>
+  <p>Material changes will be posted here with an updated date. We will not apply them
+     retroactively to data collected under an earlier version.</p>
+
+  <h2>Contact</h2>
+  <p>Questions about this policy, or a deletion request? Use the same channels as a
+     refund request — we reply within 2 business days.</p>
+</div>
+</main>
+
+<footer>
+  <div class="wrap fd">
+    <span>© 2026 FeedWatch</span>
+    <nav>
+      <a href="/">Home</a>
+      <a href="/refund">Refund Policy</a>
+      <a href="https://github.com/bruceonline2026/FeedWatch" target="_blank" rel="noopener">GitHub</a>
+      <a href="/zh/privacy" lang="zh-CN">中文</a>
+    </nav>
+  </div>
+</footer>
+
+</body>
+</html>

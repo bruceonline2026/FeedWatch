@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>隐私政策 — FeedWatch</title>
+<meta name="description" content="FeedWatch 隐私政策：API Key 仅以 SHA-256 哈希存储、绝不保存明文；Feed 内容仅在内存中处理、从不落盘。">
+<link rel="canonical" href="https://api.tiici.com/zh/privacy">
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#fbfaf8; --surface:#fff; --surface-2:#f5f4f0;
+  --text:#1a1a18; --text-2:#5c5b56; --text-3:#8a8983;
+  --border:#e3e1db; --border-2:#cfccc4;
+  --accent:#c2410c; --accent-soft:#fff2e8; --accent-border:#fed7aa;
+  --ok:#0f6e56; --ok-soft:#e6f5ef;
+  --code-bg:#1c1c1a; --code-text:#e8e6e0;
+  --radius:12px;
+  --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+  --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+}
+body{font-family:var(--sans);background:var(--bg);color:var(--text);line-height:1.65;font-size:15px;-webkit-font-smoothing:antialiased}
+.wrap{max-width:760px;margin:0 auto;padding:0 24px}
+a{color:var(--accent);text-decoration:none}
+a:hover{text-decoration:underline}
+code{font-family:var(--mono);font-size:.88em}
+header{position:sticky;top:0;z-index:50;background:rgba(251,250,248,.92);backdrop-filter:blur(8px);border-bottom:1px solid var(--border)}
+.hd{display:flex;align-items:center;gap:24px;height:60px}
+.logo{display:flex;align-items:center;gap:9px;font-weight:600;font-size:16px}
+.mark{width:24px;height:24px;border-radius:6px;background:var(--accent);display:grid;place-items:center;flex:none}
+.mark svg{width:14px;height:14px;stroke:#fff;stroke-width:2.2;fill:none}
+nav{margin-left:auto;display:flex;gap:20px;font-size:14px}
+nav a{color:var(--text-2)}
+nav a:hover{color:var(--text);text-decoration:none}
+main{padding:52px 0 72px}
+h1{font-size:32px;line-height:1.25;letter-spacing:-.02em;margin-bottom:10px}
+.lede{color:var(--text-2);font-size:17px;margin-bottom:34px}
+h2{font-size:19px;margin:34px 0 12px;letter-spacing:-.01em}
+h3{font-size:16px;margin:22px 0 8px}
+p{margin-bottom:13px}
+ul,ol{margin:0 0 14px 22px}
+li{margin-bottom:6px}
+.updated{color:var(--text-3);font-size:13.5px;margin-bottom:30px;padding-bottom:20px;border-bottom:1px solid var(--border)}
+.callout{background:var(--ok-soft);border:1px solid #b8e0d0;border-radius:var(--radius);padding:16px 18px;margin:22px 0}
+.callout p:last-child{margin-bottom:0}
+.callout strong{color:var(--ok)}
+.note{background:var(--surface-2);border-left:3px solid var(--border-2);padding:12px 16px;margin:18px 0;color:var(--text-2);font-size:14.5px;border-radius:0 6px 6px 0}
+table{width:100%;border-collapse:collapse;margin:18px 0;font-size:14.5px}
+th,td{text-align:left;padding:10px 12px;border-bottom:1px solid var(--border)}
+th{font-weight:600;color:var(--text-2);font-size:13.5px;text-transform:uppercase;letter-spacing:.03em}
+td code{background:var(--surface-2);padding:2px 6px;border-radius:4px;font-size:13px}
+footer{border-top:1px solid var(--border);padding:24px 0;color:var(--text-3);font-size:13.5px}
+.fd{display:flex;gap:20px;flex-wrap:wrap;align-items:center}
+.fd nav{margin-left:auto}
+</style>
+</head>
+<body>
+<header>
+  <div class="wrap hd">
+    <div class="logo"><span class="mark"><svg viewBox="0 0 24 24"><path d="M4 12a8 8 0 018 8M4 6a14 14 0 0114 14"/><circle cx="5" cy="19" r="1.4" fill="#fff" stroke="none"/></svg></span>FeedWatch</div>
+    <nav>
+      <a href="/zh/">首页</a>
+      <a href="/zh/refund">退款政策</a>
+      <a href="/" lang="en">English</a>
+    </nav>
+  </div>
+</header>
+<main>
+<div class="wrap">
+  <h1>隐私政策</h1>
+  <p class="lede">简短版：API Key 只存哈希，Feed 内容在内存中处理、从不落盘，我们不出售也不与任何人共享你的数据。</p>
+  <p class="updated">最后更新：2026-10-16</p>
+
+  <div class="callout">
+    <p><strong>我们实际保留什么：</strong>API Key 的 SHA-256 哈希、你提供的监控点URL、你的套餐等级、以及抓取失败时的错误信息。<strong>全部在服务器内存中。</strong></p>
+  </div>
+
+  <h2>存什么、存多久</h2>
+  <table>
+    <tr><th>数据</th><th>形式</th><th>保留时长</th></tr>
+    <tr><td>API Key</td><td><strong>仅 SHA-256 哈希</strong> —— 明文只在创建时显示一次，此后再不写入任何地方</td><td>直到你删除该 Key，或服务重启</td></tr>
+    <tr><td>监控点 URL</td><td>明文，存于内存</td><td>直到你删除该监控点</td></tr>
+    <tr><td>Feed 内容</td><td><strong>从不存储</strong> —— 内存中解析、比对后立即丢弃</td><td>数秒</td></tr>
+    <tr><td>检出的变更</td><td>投递到你的 webhook 后即丢弃</td><td>数秒</td></tr>
+    <tr><td>错误信息</td><td>明文，存于内存（如「上游返回 HTTP 403」）</td><td>直到下次成功检查</td></tr>
+    <tr><td>服务器访问日志</td><td>请求路径、状态码、IP、时间戳 —— <strong>不含请求体</strong></td><td>按主机配置</td></tr>
+  </table>
+
+  <h2>三点值得单独说明</h2>
+
+  <h3>你的 API Key 从不以明文存储</h3>
+  <p>创建 Key 时，响应里会包含它<strong>，且仅此一次</strong>。
+     之后我们只保存 <code>SHA-256(key)</code> 并据此比对。
+     <strong>即使有人获得服务器内存的完整读取权限，也无法从我们持有的数据反推出你的 Key。</strong></p>
+  <p>代价也要说清楚：<strong>我们无法帮你找回丢失的 Key</strong>，
+     也不会把它再发一封邮件给你。丢了就重新创建一把。</p>
+
+  <h3>Feed 内容不落盘</h3>
+  <p>抓取时，响应体在内存中解析、与上一轮快照比对，然后丢弃。
+     <strong>没有数据库、没有文件、没有缓存</strong> ——
+     我们不会在暗中构建互联网的影子副本。</p>
+
+  <h3>监控点不扛重启 —— 这有两面性</h3>
+  <p>因为一切都在内存中，<strong>服务重启会清空所有监控点与 Key</strong>。
+     这对隐私是好事，对可靠性是坏事。持久化存储在下一版本；
+     到时会先通知你，再变更本政策。</p>
+
+  <h2>会传给第三方什么</h2>
+  <table>
+    <tr><th>对象</th><th>何时</th><th>传什么</th></tr>
+    <tr><td>你监控的 Feed 站点</td><td>每次检查</td><td>标准 HTTP 请求元信息 —— <strong>你的 API Key 绝不转发出去</strong></td></tr>
+    <tr><td>你的 webhook 地址</td><td>检出变更时</td><td>变更内容 + HMAC 签名</td></tr>
+    <tr><td>Slack / Discord</td><td>你启用后</td><td>仅你配置的那条消息</td></tr>
+  </table>
+  <p><strong>我们不使用广告网络、分析追踪器或第三方数据 broker。</strong></p>
+
+  <h2>支付</h2>
+  <p>支付由支付机构全程处理。我们只收到「扣款成功」与「购买了哪个套餐」的确认，
+     <strong>绝不接触你的完整卡号或银行信息</strong>。</p>
+
+  <h2>安全措施</h2>
+  <ul>
+    <li>Webhook 带 <strong>HMAC-SHA256 签名</strong>，你可验证来源并拒绝伪造内容。</li>
+    <li>Node 服务只监听 <code>127.0.0.1</code>；TLS 在反向代理终结。</li>
+    <li>所有出网抓取都经过 <strong>SSRF 防护</strong>（DNS 钉IP + 逐跳重校验），
+        服务无法被用来探测内网或云元数据地址。</li>
+    <li>Feed 响应体上限 10 MB，XML 实体展开有结构性约束。</li>
+  </ul>
+
+  <h2>你的权利</h2>
+  <p>你可以随时：</p>
+  <ul>
+    <li>删除你创建的任何监控点</li>
+    <li>询问我们持有你哪些数据 —— <strong>答案会很短，因为确实没多少</strong></li>
+    <li>要求删除你的账号数据</li>
+  </ul>
+  <p>由于一切在内存中、没有数据库，删除账号实质上就是「重启 + 让你的 Key 失效」。
+     你提出请求后我们会为你执行。</p>
+
+  <h2>未成年人</h2>
+  <p>FeedWatch 是开发者工具，不面向 16 岁以下人群，我们不故意收集未成年人信息。</p>
+
+  <h2>政策变更</h2>
+  <p>实质性变更会在本页更新并标注日期，<strong>不会追溯适用</strong>到旧版政策下已收集的数据。</p>
+
+  <h2>联系方式</h2>
+  <p>对本政策有疑问，或需要删除数据？用与申请退款相同的方式联系我们，
+     我们在 2 个工作日内回复。</p>
+</div>
+</main>
+<footer>
+  <div class="wrap fd">
+    <span>© 2026 FeedWatch</span>
+    <nav>
+      <a href="/zh/">首页</a>
+      <a href="/zh/refund">退款政策</a>
+      <a href="https://github.com/bruceonline2026/FeedWatch" target="_blank" rel="noopener">GitHub</a>
+      <a href="/privacy" lang="en">English</a>
+    </nav>
+  </div>
+</footer>
+</body>
+</html>
