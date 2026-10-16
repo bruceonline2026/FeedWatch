@@ -393,7 +393,7 @@ check_feed(url)                                        <span class="c">立即检
 <section id="pricing">
   <div class="wrap">
     <h2>定价</h2>
-    <p class="sub">验证期价格，先用免费层撞到上限再决定。</p>
+    <p class="sub">先用免费层撞到上限，再决定要不要升级。</p>
     <div class="pg2">
       <div class="plan">
         <div class="price">$0<span> /月</span></div>
@@ -407,50 +407,25 @@ check_feed(url)                                        <span class="c">立即检
         <a href="#how" class="btn btn-ghost" style="justify-content:center">免费开始</a>
       </div>
       <div class="plan hot">
-        <div class="tag">最常选</div>
-        <div class="price">$9<span> /月</span></div>
-        <div class="desc">小团队与个人开发者</div>
-        <ul>
-          <li><svg viewBox="0 0 24 24"><path d="M5 12l5 5L20 7"/></svg>25 个监控点</li>
-          <li><svg viewBox="0 0 24 24"><path d="M5 12l5 5L20 7"/></svg>1 小时检查一次</li>
-          <li><svg viewBox="0 0 24 24"><path d="M5 12l5 5L20 7"/></svg>关键词过滤</li>
-          <li><svg viewBox="0 0 24 24"><path d="M5 12l5 5L20 7"/></svg>字段级 diff</li>
-        </ul>
-        <a href="#how" class="btn btn-primary" style="justify-content:center">升级 Starter</a>
-      </div>
-      <div class="plan">
+        <div class="tag">全功能解锁</div>
         <div class="price">$29<span> /月</span></div>
         <div class="desc">生产环境与更高频</div>
         <ul>
-          <li><svg viewBox="0 0 24 24"><path d="M5 12l5 5L20 7"/></svg>100 个监控点</li>
+          <li><svg viewBox="0 0 24 24"><path d="M5 12l5 5L20 7"/></svg>25 个监控点</li>
+          <li><svg viewBox="0 0 24 24"><path d="M5 12l5 5L20 7"/></svg>1 小时检查一次</li>
           <li><svg viewBox="0 0 24 24"><path d="M5 12l5 5L20 7"/></svg>15 分钟检查一次</li>
           <li><svg viewBox="0 0 24 24"><path d="M5 12l5 5L20 7"/></svg>关键词过滤</li>
           <li><svg viewBox="0 0 24 24"><path d="M5 12l5 5L20 7"/></svg>字段级 diff</li>
+          <li><svg viewBox="0 0 24 24"><path d="M5 12l5 5L20 7"/></svg>优先支持</li>
         </ul>
-        <a href="#how" class="btn btn-ghost" style="justify-content:center">升级 Pro</a>
-      </div>
-      <div class="plan">
-        <div class="price">面议</div>
-        <div class="desc">用量更大或有合规要求</div>
-        <ul>
-          <li><svg viewBox="0 0 24 24"><path d="M5 12l5 5L20 7"/></svg>监控点数量协商</li>
-          <li><svg viewBox="0 0 24 24"><path d="M5 12l5 5L20 7"/></svg>字段级 diff</li>
-          <li><svg viewBox="0 0 24 24"><path d="M5 12l5 5L20 7"/></svg>Webhook + Slack / Discord</li>
-          <li class="off"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg><span>按量计费与 SLA<span style="opacity:.7"> —— 尚未提供，需单独约定</span></span></li>
-        </ul>
-        <a href="#how" class="btn btn-ghost" style="justify-content:center">联系我们</a>
+        <a href="https://link.payoneer.com/Token?t=A9AD01CABAE944B39FC80E10DBBB9F18&src=pl" class="btn btn-primary" style="justify-content:center" target="_blank" rel="noopener">升级 Pro</a>
       </div>
     </div>
-    <p class="note">
-      <strong>关于付款：</strong>验证期通过 Payoneer 收款链接支付，信用卡约 1 小时到账。
-      付款后我们会邮件发送 API Key，一小时内完成开通。
-      <br><br>
-      <strong>免费层没有时间限制。</strong>免费额度按监控点数计算，用完<strong>不会自动扣费</strong>、
-      也<strong>不会降级</strong>你已有的监控点 —— 只是不能再新建。已有监控继续正常跑，
-      什么时候想升级、或者用不上需要更多，联系我们即可。
-      <br><br>
-      <strong>撞到上限会怎样：</strong>新建第 6 个监控点时接口返回 <code>429</code>，
-      响应里带一句提示和升级链接。不会静默失败，也不会偷偷把你已有的停掉。
+    <p class="sub" style="margin-top:18px">
+      免费层监控点超限会返回 <code>429</code> 并给出升级提示，
+      <strong>已有监控点继续运行</strong> —— 限制只挡住新建。
+      不自动扣费、不自动降级，随时可取消，详见
+      <a href="/zh/refund">退款政策</a>。
     </p>
   </div>
 </section>
