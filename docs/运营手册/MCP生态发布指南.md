@@ -245,3 +245,65 @@ Error: 401 "token has invalid claims: token is expired"
 ⚠️ **已发布版本的元数据不可修改**（`mcp-publisher status` 只支持
 active/deprecated/deleted），所以这条改进**要下个版本才生效**。
 当前 `server.json` 里的 headers 仅在下次publish 时提交。
+
+
+---
+
+## 七、⚠️ Smithery 实测：对「远程 + API Key 鉴权」不通（2026-10-16 记录）
+
+**结论：不要在 Smithery 上花时间。** 我们试了 50 分钟、撞了 5 面墙。
+
+### 撞过的墙（按时间顺序）
+
+| # | 现象 | 根因 |
+|---|---|---|
+| 1 | 网页 Publish → Connection settings弹窗 | 填了 header 参数，**它不认**（弹窗格式 ≠ configSchema）|
+| 2 | 日志：`No config schema provided` | 缺 `configSchema` → 「users will NOT be prompted for these values」|
+| 3 | 给configSchema 后仍要 OAuth | `Server metadata discovered (OAuth required)` —— 即使识别了 schema 仍判定要 OAuth |
+| 4 | 授权链接 `{"error":"not_found"}` | deploymentId 状态不一致，`--resume` 报 `400 not in AUTH_REQUIRED state` |
+| 5 | 等 5 分钟后 | `WorkflowInternalError: Attempt failed due to internal workflow error` ← **它自己崩了** |
+
+### 唯一推进的一步
+
+`smithery mcp publish --config-schema` 确实让日志从
+`No config schema provided` 变成 `Using user-provided config schema`，
+但**随后仍然卡在OAuth**。
+
+### 正确的命令（留档，供将来有 OAuth 实现时参考）
+
+```bash
+smithery mcp publish "https://api.tiici.com/mcp" \
+  -n <namespace>/feedwatch \
+  --config-schema '{"type":"object","properties":{"apikey":{
+    "type":"string","title":"FeedWatch API Key",
+    "x-from":{"header":"x-api-key"}}},"required":["apikey"]}'
+```
+
+- `x-from` 告诉Smithery「用户填的值从哪个 header 读」
+- ⚠️ `authorization` 不能作为 `x-from`（Smithery OAuth 保留头），但可用 `x-to`
+- schema 限制：**≤20 字段、≤1KB**，只支持扁平类型
+
+### 什么情况下 Smithery 才可用
+
+需要**完整 OAuth 实现**（授权端点 + token 签发）。
+我们目前是 API Key 鉴权 → 不兼容。
+
+**若将来要做**：约 2-3 小时，收益仅「目录列表好看一点」——
+用户连上照样要自己填 Key，**不改变转化路径**。优先级低。
+
+### 替代路径（更省事，已验证）
+
+| 渠道 | 方式 | 耗时 |
+|---|---|---|
+| **官方注册表** | `mcp-publisher publish` | ✅ 已完成 |
+| **Glama** | **自动收录**，只需 claim ownership +配 test profile | ✅ 已完成（30 分钟）|
+| **PulseMCP** | 从官方注册表自动同步 | ⏳ 7 天 |
+
+**Glama 的 test profile 关键点**：
+- Header 名填 `X-API-Key`（大小写不敏感）
+- 官方明确说它是「separate from personal connections」，
+  只用于自动健康检查与工具发现，**不会展示给访客**
+- 配好后 Status 从 🔴 Unhealthy → 🟢 Healthy
+
+> 💡 **教训**：**自动收录的渠道优先**。Glama 从 GitHub 推送到可搜索，
+> 零表单；Smithery 要走 OAuth 流程，投入产出比悬殊。

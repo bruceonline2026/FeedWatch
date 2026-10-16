@@ -1,0 +1,16 @@
+{
+  "type": "object",
+  "properties": {
+    "apikey": {
+      "type": "string",
+      "title": "FeedWatch API Key",
+      "description": "Your FeedWatch API key — get one at https://api.tiici.com/ (see /mcp for setup)",
+      "x-from": {
+        "header": "x-api-key"
+      }
+    }
+  },
+  "required": [
+    "apikey"
+  ]
+}
