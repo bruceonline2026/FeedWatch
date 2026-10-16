@@ -42,7 +42,7 @@
 ### Step 1 · 安装发布 CLI
 
 ⚠️ **`mcp-publisher` 不发布到 npm** —— `npm install -g @modelcontextprotocol/registry-publisher`
-会返回 `404 Not Found`（**已于 2026-07-15 实测踩坑**）。官方只提供预编译二进制。
+会返回 `404 Not Found`（**已于 2026-10-15 实测踩坑**）。官方只提供预编译二进制。
 
 **推荐：Homebrew**
 ```bash
@@ -111,7 +111,7 @@ curl "https://registry.modelcontextprotocol.io/v0.1/servers?search=io.github.bru
 
 ---
 
-## ⚠️ 本节踩过的坑（2026-07-15 实测）
+## ⚠️ 本节踩过的坑（2026-10-15 实测）
 
 | 坑 | 现象 | 正解 |
 |---|---|---|

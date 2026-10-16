@@ -1,10 +1,10 @@
 # API Key 管理与配额（运营手册）
 
-> ⛔ **2026-07-16 警示：暂不给客户发 Key。**
+> ⛔ **2026-10-16 警示：暂不给客户发 Key。**
 > 代码层面客户 Key 能调用 `/v1/apikeys` 无限签发新 Key（需求 D8/D9）。
 > 当前是**零客户阶段，无实际暴露** —— 但**第一把客户 Key 发出前必须先修 D8**。
 
-**最后更新**：2026-07-16
+**最后更新**：2026-10-16
 **适用对象**：徐总（日常签发）+ 后续运维
 **线上服务**：https://api.tiici.com/
 
@@ -40,7 +40,7 @@
 
 ## 一、给客户签发一把 Key
 
-### ⛔ 现状：暂不建议给客户发 Key（2026-07-16 新增）
+### ⛔ 现状：暂不建议给客户发 Key（2026-10-16 新增）
 
 **代码层面客户 Key 能调用 `/v1/apikeys` 无限签发新 Key**（需求 D8 / D9，详见
 `docs/需求/软件开发需求说明书.md` 模块 D）：
@@ -72,7 +72,7 @@ KEY=$(ssh feedwatch-vultr 'sudo grep -oP "FEEDWATCH_BOOTSTRAP_KEY=\K.*" /etc/fee
 curl -X POST https://api.tiici.com/v1/apikeys \
   -H "Content-Type: application/json" \
   -H "x-api-key: $KEY" \
-  -d '{"label":"客户A-2026-07"}'
+  -d '{"label":"客户A-2026-10"}'
 ```
 
 ### 返回
@@ -103,7 +103,7 @@ curl -X POST https://api.tiici.com/v1/apikeys \
 **按「客户 + 签发年月」起名，不要用人名。**
 
 ```
-✅ "客户A-2026-07"    "test-org-2026-07"
+✅ "客户A-2026-10"    "test-org-2026-10"
 ❌ "张三"             "我的key"      "test"
 ```
 
@@ -218,7 +218,7 @@ curl -s -X POST https://api.tiici.com/v1/monitors -H "Content-Type: application/
   -H "x-api-key: $KEY" -d '{"url":"https://example.com/f.xml","name":"t"}' # 连建 6 次
 ```
 
-**三处必须相同。** 只改申报不强制 = 对外虚假宣传（2026-07-16 发生过，偏差 24 倍）。
+**三处必须相同。** 只改申报不强制 = 对外虚假宣传（2026-10-16 发生过，偏差 24 倍）。
 
 > ⚠️ `deploy-linux.sh` 的 env 写入逻辑是「已存在则保留不覆盖」，
 > **新增变量必须手工 `tee -a`**，重跑部署脚本写不进去。
