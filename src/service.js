@@ -13,12 +13,28 @@ const INTERVALS = new Set([900, 3600, 21600]);
 /** feed 体积上限：与 safeFetch 的 maxBytes 保持一致 */
 const MAX_FEED_BYTES = 10 * 1024 * 1024;
 
+/**
+ * check_feed 临时快照的**每租户**容量上限。
+ *
+ * ⚠️ 必须有上限 —— 否则 (key × url) 组合数无上限 = 内存无上限，
+ * 与历史上「key 数无上限 = 总配额无限放大」是同一类资源耗尽。
+ *
+ * ⚠️ **必须是每租户上限，不是全局上限**（2026-10-17 修正）：
+ *   第一版做成了全局 `size > 200 就淘汰`，
+ *   结果**单个租户就能把全局桶占满，把其他租户的基线全部饿死**
+ *   ——「有上限」变成了「别人受害」。现在改为按 apiKeyId 分桶计数，
+ *   超出时**只淘汰该租户自己最久未用的**那条。
+ */
+const EPHEMERAL_SNAPSHOT_PER_KEY = 20;
+
 /** 内存存储（MVP 阶段用；生产换 SQLite/Postgres） */
 export class MemoryStore {
   constructor() {
     this.monitors = new Map();
     this.snapshots = new Map();
     this.apikeys = new Map();
+    /** check_feed 的临时快照，与 monitors 的快照互不影响 */
+    this.ephemeralSnapshots = new Map();
   }
 
   createMonitor({ url, name, intervalSeconds, keywords, apiKeyId }) {
@@ -82,6 +98,87 @@ export class MemoryStore {
   saveSnapshot(id, snap) { this.snapshots.set(id, snap); }
   /** ★ 删除监控点时一并回收快照，否则 snapshots Map 永久增长（内存泄漏） */
   deleteSnapshot(id) { return this.snapshots.delete(id); }
+
+  /**
+   * ★ 临时快照：check_feed 用（2026-10-17 修 P0-2）
+   *
+   * ── 为什么要这一套 ──
+   * `check_feed` 承诺「不用先建监控点就能查一次并返回字段级 diff」，
+   * 但原实现调`checkOnce(url, store, null)` —— **prevSnapshot 硬编码 null**。
+   * 于是每次调用都是 `reason: "first_check"`、全部条目报 `added`，
+   * **永远报不出 `modified`**。
+   *
+   * 后果不是「少一个功能」，而是**我们卖的那个核心能力无法被验证**：
+   * 竞品只能说「这页变了」，我们承诺说「标题从 X 变成 Y」——而后者没兑现。
+   *
+   * ── 为什么用独立的 map，而不是复用 monitors 的 ──
+   * 监控点快照的 key 是 monitorId，生命周期跟随监控点。
+   * 而 check_feed 的 key 必须是 **(apiKeyId, url)**：同一个 Key 查同一个 URL
+   * 要能对比上次；而**不同 Key 查同一 URL 必须互不可见** ——
+   * 否则 A 用户会看到 B 用户上次的对比结果，那是数据泄露。
+   *
+   * ── 上限为什么必须有 ──
+   * 这是资源耗尽的老教训：`docs/复盘/回归测试要求点清单.md` 记录过
+   * 「key 数无上限 = 总配额 = MAX_MONITORS × key 数 无限放大」。
+   * 这里同理 —— URL 组合数无上限 = 快照内存无上限。
+   * 所以超过上限时**淘汰最久未用的**（LRU），而不是拒绝服务：
+   * 用户只是「重新基线化一次」，不会卡住；而静默撑爆会让整个服务挂掉。
+   */
+  saveEphemeralSnapshot(apiKeyId, url, snap, { now = Date.now(), limit = EPHEMERAL_SNAPSHOT_PER_KEY } = {}) {
+    const k = this.ephemeralKey(apiKeyId, url);
+    const entry = this.ephemeralSnapshots.get(k);
+    if (entry) entry.at = now;
+    else this.ephemeralSnapshots.set(k, { snap, at: now, owner: apiKeyId });
+
+    // ★ 每租户各自限额：只淘汰**同一 apiKeyId** 最久未用的那条。
+    //   全局淘汰会让一个租户把别人的基线饿死 —— 那不是限额，那是攻击面。
+    const mine = [...this.ephemeralSnapshots.entries()]
+      .filter(([, v]) => v.owner === apiKeyId);
+    while (mine.length > limit) {
+      mine.sort((a, b) => a[1].at - b[1].at);
+      this.ephemeralSnapshots.delete(mine[0][0]);
+      mine.shift();
+    }
+  }
+
+  getEphemeralSnapshot(apiKeyId, url) {
+    const entry = this.ephemeralSnapshots.get(this.ephemeralKey(apiKeyId, url));
+    return entry?.snap ?? null;
+  }
+
+  /** 用户显式要求「重新基线化」—— 否则上次快照会一直影响后续判断 */
+  clearEphemeralSnapshot(apiKeyId, url) {
+    return this.ephemeralSnapshots.delete(this.ephemeralKey(apiKeyId, url));
+  }
+
+  /**
+   * ★ key 必须含 apiKeyId（租户隔离），且**不可用 toLowerCase**。
+   *
+   * 2026-10-17 修正：第一版对整个 url 做了 `.toLowerCase()`，
+   * 看似规范化，实则**破坏 path 的大小写语义** ——
+   * `https://x.com/A` 与 `https://x.com/a` 是两个不同资源，
+   * 却被判为同一份快照 → A 用户改了 /a，B 用户查 /a 会看到错误 diff。
+   *
+   * 正确做法：只归一化 **host**（DNS 本就大小写不敏感），
+   *   path 与 query **原样保留**（它们可能区分大小写，且 query 常带
+   *   token/时间戳，若参与 key 会让每次调用都成新key）。
+   */
+  ephemeralKey(apiKeyId, url) {
+    let scheme = 'https', host = '', pathAndQuery = String(url);
+    try {
+      const u = new URL(String(url).trim());
+      scheme = u.protocol.toLowerCase();
+      host = u.host.toLowerCase();      // host 大小写不敏感，可归一
+      // ⚠️ path 与 query 保持原样：path 可能区分大小写
+      pathAndQuery = (u.pathname ?? '/') + (u.search ?? '');
+    } catch {
+      // 非法 URL：原样参与哈希，保证不会与任何合法 URL 撞 key
+    }
+    return `${apiKeyId}::${createHash('sha256')
+      .update(`${scheme}//${host}${pathAndQuery}`)
+      .digest('hex')
+      .slice(0, 16)}`;
+  }
 
   /**
    * 签发一把 API Key。

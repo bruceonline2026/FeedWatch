@@ -29,8 +29,38 @@ export class Snapshot {
     this.fetchedAt = fetchedAt;
     this.items = new Map();
     for (const it of parsed.items) this.items.set(it.id, it);
+
+    /**
+     * ★ P0-3 修复（2026-10-17）：粗筛哈希必须覆盖**全部** TRACKED_FIELDS。
+     *
+     * 原实现：
+     *   parsed.items.map((i) => `${i.id}:${i.contentHash}`)
+     * 而 `i.contentHash` 在 parser 里是 `sha256(cleanContent)` —— **只有正文**。
+     *
+     * 后果：改title / link / publishedAt / author / category 时，
+     *   该条目的 contentHash 恒定 → 整份快照的 contentHash 恒定
+     *   → `diffSnapshots` 第一层直接 `return { changed:false }`
+     *   → **6 个TRACKED_FIELDS 里有 5 个永远检测不到**。
+     *
+     * 这直接击穿产品核心卖点：我们承诺「告诉你哪个字段变了」，
+     *   而竞品只会说「这页变了」。但只要改动不涉及正文，
+     *   **我们连「变了」都报不出来** —— 退化得比竞品还差。
+     *
+     * ⚠️ 为什么不在 parser 里改contentHash：
+     *   parser 的 contentHash 是**对外契约**（落地页写明「正文只送哈希与长度，
+     *   不回传全文」），改它会牵动 webhook 载荷与隐私承诺。
+     *   而这里需要的只是「一个能代表整体是否变化的指纹」，
+     *   在 Snapshot 层重算最安全、影响面最小。
+     *
+     * 成本：字符串拼接从「id+正文哈希」变成「id+6 个字段」，
+     *   但这仍是一次性 O(n) 且n 通常是几十到几百 —— 相比省掉的
+     *   逐字段 diff（O(n×6)）依然是压倒性的划算。
+     */
     this.contentHash = sha256(
-      parsed.items.map((i) => `${i.id}:${i.contentHash}`).sort().join('|')
+      parsed.items
+        .map((i) => `${i.id}:${TRACKED_FIELDS.map((f) => String(i[f] ?? '')).join('')}`)
+        .sort()
+        .join('|')
     );
   }
 

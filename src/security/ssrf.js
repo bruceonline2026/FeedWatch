@@ -81,6 +81,57 @@ function isPrivateV6(ip) {
   return false;
 }
 
+const ALLOW_LOCAL_FETCH = process.env.FEEDWATCH_ALLOW_LOCAL_FETCH === '1';
+
+/** 仅这些 IP 会被放行 —— 必须是回环地址，不含任何真实内网段 */
+const ALLOWED_LOCAL_IPS = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
+
+export function localFetchAllowed() {
+  return ALLOW_LOCAL_FETCH;
+}
+
+/**
+ * ⚠️ 仅回环地址算「测试放行」。非回环的内网段（10.x/172.16-31.x/192.168.x）
+ * 与链路本地地址（169.254.169.254 云元数据）**一律不放行**。
+ */
+function isLoopback(address) {
+  return ALLOWED_LOCAL_IPS.has(String(address));
+}
+
+/**
+ * ★ 测试专用放行：只在 `safeFetch` 的**最外层**短路，`assertHostIsPublic`
+ * 一行都不改。
+ *
+ * ── 为什么放在最外层而不是 assertHostIsPublic 里 ──
+ * 第一版（2026-10-17）把放行写成 `assertHostIsPublic` 里的
+ * `if (ALLOW_LOCAL_FETCH && isLoopback(ip)) continue;`，
+ * 后果是**改变了安全逻辑的控制流**：
+ *   · `continue` 让私有地址混在返回的 ips 里，与正常路径无法区分
+ *   · 加上 `const` 声明在使用点之后（TDZ），首次求值抛 ReferenceError
+ *     中断了整个 assertHostIsPublic
+ * 实测症状是「同一进程里A URL 的响应被串给 B URL」——
+ * 看起来像生产级数据串用，实际是测试开关引入的。
+ *
+ * 现在：安全逻辑**零改动**，测试开关只在最外层决定
+ * 「这次要不要做公网可达性校验」。误伤面最小，且生产完全不经过这段。
+ *
+ * ⚠️ 放行范围必须精确到回环：**第一版写「跳过全部检查」时，
+ *    连 169.254.169.254 也被放行** —— SSRF 防线在测试环境下等于不存在，
+ *    而项目里恰好有一条测试专门验「内网地址被拦截」，它立刻变红。
+ */
+function testBypassFor(hostname) {
+  if (!ALLOW_LOCAL_FETCH) return null;
+  const h = String(hostname).toLowerCase();
+  // localhost / *.localhost / 裸回环 IP
+  if (h === 'localhost' || h.endsWith('.localhost')) {
+    return { address: '127.0.0.1', family: 4 };
+  }
+  if (isLoopback(h)) {
+    return { address: h, family: net.isIP(h) === 6 ? 6 : 4 };
+  }
+  return null;
+}
+
 export function isPrivateAddress(ip) {
   const family = net.isIP(ip);
   if (family === 4) return isPrivateV4(ip);
@@ -114,8 +165,7 @@ export function assertHttpUrl(rawUrl) {
 }
 
 /** 解析主机名并校验全部 IP 均为公网地址 */
-export async function assertHostIsPublic(hostname, resolver = dns) {
-  const literal = net.isIP(hostname);
+export async function assertHostIsPublic(hostname, resolver = dns) {  const literal = net.isIP(hostname);
   let ips;
   if (literal) {
     ips = [{ address: hostname, family: literal }];
@@ -483,7 +533,9 @@ export async function safeFetch(rawUrl, {
 
   for (let hop = 0; hop <= maxRedirects; hop++) {
     const u = new URL(currentUrl);
-    const ips = await assertHostIsPublic(u.hostname, resolver);
+    // ★ 测试放行只在这里短路，assertHostIsPublic 本身零改动（见 testBypassFor 说明）
+    const bypass = testBypassFor(u.hostname);
+    const ips = bypass ? [bypass] : await assertHostIsPublic(u.hostname, resolver);
     const pinnedIp = ips[0];
     const proxy = perHopProxy(u);
 

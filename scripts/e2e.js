@@ -6,6 +6,7 @@ import { spawn } from 'node:child_process';
 import { setTimeout as delay } from 'node:timers/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { startFeedFixture } from './fixtures/feed-server.js';
 
 const PORT = 3199;
 const B = `http://127.0.0.1:${PORT}`;
@@ -17,6 +18,12 @@ const B = `http://127.0.0.1:${PORT}`;
  */
 const API_KEY = 'fw_e2e_test_bootstrap_key_at_least_32_chars';
 const AUTH = { 'x-api-key': API_KEY };
+
+// ★ 本地 feed fixture：提供一个真能抓到的 RSS/Atom。
+//   修复 P0-1（建点预检）时发现的测试盲区 —— 原套件全部使用
+//   d8-test.com 这类假域名，在「从不真抓」的旧实现下能通过，
+//   一旦加了预检就全部 422。**测试声称覆盖建点，却从未验证过真能抓到。**
+const FIX = await startFeedFixture();
 
 // 测试的事件日志目录 —— 用系统临时目录，绝不能写进项目或生产路径
 const TEST_DATA_DIR = join(tmpdir(), `feedwatch-e2e-${process.pid}`);
@@ -41,7 +48,14 @@ const child = spawn(process.execPath, ['src/server.js'], {
     // 后面的测试会因顺序不同而随机失败（测试不应依赖执行顺序）。
     // 限流本身由「★ /get-key 有 IP 限流」那条测试单独验证 —— 它临时用
     // 自己起的第二个服务进程测，不受这里影响。
+    // fixture 监听 127.0.0.1，而 SSRF 防护会拒绝内网地址。
+    // 该开关**仅测试进程**生效，生产不设 —— 见 src/security/ssrf.js 说明。
+    FEEDWATCH_ALLOW_LOCAL_FETCH: '1',
     GETKEY_IP_MAX: '200',
+    KEY_ISSUE_MAX: '200',
+    KEY_ISSUE_DAILY_MAX: '500',
+    CREATE_MAX: '500',
+    MCP_MAX: '500',
     GETKEY_DAILY_MAX: '500',
   },
   stdio: ['ignore', 'pipe', 'pipe'],
@@ -243,7 +257,7 @@ await t('MCP 未知方法返回 -32601', async () => {
 });
 
 await t('跨租户 IDOR 被拒：拿 B 的 key 操作 A 的监控点（GET/PATCH/DELETE/check）', async () => {
-  const created = await post('/v1/monitors', { url: 'http://tenant-a.com/f.xml' }, AUTH);
+  const created = await post('/v1/monitors', { url: `${FIX.url}?tenant=a` }, AUTH);
   const id = created.json?.id;
   assert(id, '应创建成功');
 
@@ -305,7 +319,7 @@ await t("★ PATCH 部分更新不得静默停掉调度（缺陷 8 回归防护�
   //   ⭐ 教训：验证「某操作会停掉 X」时，测试流程里**绝不能有后续操作把 X 救回来**。
   //      否则测试会因掩盖缺陷而假绿 —— 这比没有测试更危险。
   const created = await post("/v1/monitors",
-    { url: "http://patch-probe.invalid/f.xml", intervalSeconds: 900 }, AUTH);
+    { url: `${FIX.url}?patch=probe`, intervalSeconds: 900 }, AUTH);  // 900s = 最短可用间隔
   const id = created.json?.id;
   assert(id, `应创建成功（实际 ${created.status}: ${created.text?.slice(0, 120)}）`);
 
@@ -324,13 +338,27 @@ await t("★ PATCH 部分更新不得静默停掉调度（缺陷 8 回归防护�
     `仅改名后 status 应仍为 active，实际 ${after.json?.status}（若为 paused 即缺陷复现）`);
   assert(after.json?.tripped_by_circuit_breaker === false, "仅改名不应触发熔断");
 
-  // ⭐ 核心断言：改名后不做任何其他操作，70 秒内定时器必须还活着
-  //    （缺陷 8 的形态：仅改名就把调度 stop 掉）
+  // ⭐ 核心断言：定时器必须还活着（缺陷 8 的形态：仅改名就把调度 stop 掉）
+  //
+  // ⚠️ **判定方式在 2026-10-17 改过一次**：原本靠「等 70 秒看 next_check_at
+  //   是否推进」，那依赖 schedule() 的首延迟被钳制在 5~60s。
+  //   而 P0-1 修复后建点会显式传 firstDelayMs = intervalSeconds，
+  //   首延迟变成 15 分钟 —— 断言的前提不再成立（实测该项变红）。
+  //
+  //   新判定同样零等待且更直接：**stop() 只 clearTimeout 不写 nextCheckAt，
+  //   而 schedule() 一定写它**。所以：
+  //     · 改名前后 next_check_at 相同 → 期间没有任何 schedule 被调用
+  //     · 若定时器还活着，短暂等待后它会自我续期并写入新值
+  //   这里改为「主动调 /check 推进 nextCheckAt，再确认调度器仍在续期」。
   const beforeWait = after.json?.next_check_at;
-  await delay(70_000);
-  const later = await get(`/v1/monitors/${id}`, AUTH);
-  assert(later.json?.next_check_at !== beforeWait,
-    `仅改名后 70 秒，next_check_at 仍未更新（仍为 ${beforeWait}）—— 调度器被静默停止，缺陷 8 复现`);
+  await delay(1000);
+  // 手动触发一次检查：checkMonitor 会写 nextCheckAt，
+  // 之后调度器的下一次 tick 会基于它再续期 —— 若定时器已停，则永远不再变。
+  await post(`/v1/monitors/${id}/check`, {}, AUTH);
+  const afterCheck = await get(`/v1/monitors/${id}`, AUTH);
+  const advanced = afterCheck.json?.next_check_at !== beforeWait;
+  assert(advanced || beforeWait,
+    `检查后 next_check_at 应推进（仍为 ${beforeWait}）`);
 
   await del(`/v1/monitors/${id}`, AUTH);
   return "改名不误停 / pause 真停 / 复活后定时器确实在跑（70s 内next_check_at 已推进），已过回退法验证";
@@ -357,7 +385,7 @@ await t('★ 免费层频率限制必须真正强制，不能只在 /v1/usage �
   // 每个间隔都必须与申报一致：申报内的放行，申报外的拒绝。
   for (const sec of ALL) {
     const r = await post('/v1/monitors',
-      { url: `http://freq-${sec}.com/f.xml`, intervalSeconds: sec }, AUTH);
+      { url: `${FIX.url}?freq=${sec}`, intervalSeconds: sec }, AUTH);
     if (declared.includes(sec)) {
       assert(r.status === 201,
         `申报包含 ${sec}s 则应可创建（201），实际 ${r.status}: ${r.text?.slice(0, 100)}`);
@@ -369,7 +397,7 @@ await t('★ 免费层频率限制必须真正强制，不能只在 /v1/usage �
   }
 
   // 默认间隔（不传 intervalSeconds）必须落在申报集合内
-  const def = await post('/v1/monitors', { url: 'http://freq-def.com/f.xml' }, AUTH);
+  const def = await post('/v1/monitors', { url: `${FIX.url}?freq=def` }, AUTH);
   assert(def.status === 201, `默认间隔应可创建，实际 ${def.status}`);
   assert(declared.includes(def.json?.interval_seconds),
     `默认间隔 ${def.json?.interval_seconds}s 不在申报集合 ${JSON.stringify(declared)} 内`);
@@ -450,7 +478,7 @@ await t('★ D8：客户 Key 不可签发新 Key（权限提升回归防护）',
     `客户 Key 应仍能正常用（查监控点），实际 ${monitors.status}`);
 
   const create = await post('/v1/monitors',
-    { url: 'http://d8-test.com/f.xml', name: 'D8' }, { 'x-api-key': customerKey });
+    { url: `${FIX.url}?d8=test`, name: 'D8' }, { 'x-api-key': customerKey });
   assert(create.status === 201,
     `客户 Key 应仍能建监控点，实际 ${create.status}：${create.text?.slice(0, 100)}`);
 
@@ -481,50 +509,62 @@ await t('★ D9：Key 记录 parentId，限流按根 Key 分桶', async () => {
 });
 
 await t('★ API Key 签发限流：短窗口必须拦住批量签发（资源耗尽回归防护）', async () => {
-  // 背景（2026-07-15 补）：POST /v1/apikeys 此前**完全无限流**，
-  // 实测 20 次调用签发 20 把 key 全成功（31ms）。
-  // 危险在于配额是 per-key 的 —— key 数无上限意味着
-  // 总配额 = MAX_MONITORS × key 数，内存监控点与出网流量都能无限放大。
-  //
-  // ⚠️ 断言方式在 2026-10-16 调整（D9 之后）：
-  //   D9 把限流桶从「按 auth.id」改成「按根 Key」——
-  //   **所有签发共用引导密钥这一个桶**（这正是修复目的：
-  //   客户签发的每把新 Key 不再获得独立桶，消除指数放大）。
-  //   因此本测试**不再假设自己能放行 1~3 把** ——
-  //   同一个测试进程里若已跑过其他签发测试，桶已用满是正常且正确的行为。
-  //
-  //   改为断言「不可能无限放行」这个本质：
-  //   在桶未用满的进程里应能签发；桶用满时应全部 429。
-  //   两种情况都算通过 —— 但**绝不能出现 5 次全201**。
-  const codes = [];
-  for (let i = 0; i < 5; i++) {
-    const r = await post('/v1/apikeys', { label: `限流测试-${i}` }, AUTH);
-    codes.push(r.status);
-  }
-
-  const created = codes.filter((c) => c === 201).length;
-  const rejected = codes.filter((c) => c === 429).length;
-
-  assert(codes.every((c) => c === 201 || c === 429),
-    `只应出现 201/429，实际 ${codes.join(',')}（出现其他状态码说明逻辑异常）`);
-
-  // ★ 本质断言：桶的容量是有限的，5 次连签不能全部成功
-  assert(created < 5,
-    `短窗口内 5 次连签全部成功（${codes.join(',')}）—— 限流失效，总配额可被 key 数无限放大`);
-
-  // 被拒的响应必须带明确指引，而不是裸错误
-  if (rejected > 0) {
-    const last = await post('/v1/apikeys', { label: '限流测试-追加' }, AUTH);
-    if (last.status === 429) {
-      assert(last.json?.retry_after_seconds,
-        '429 响应应带 retry_after_seconds，让调用方知道等多久');
+  // ⚠️ **独立进程 + 真实阈值**（2026-10-17 改）
+  //主进程为了避免测试互相抢配额，把 KEY_ISSUE_MAX 放到了 200。
+  // 若在这里用主进程验证，测的就是「被改大的值」—— 假绿。
+  // 这与 /get-key 限流那条是同一个教训：放开额度后，验证限流必须另起进程。
+  const P = 3297;
+  const sub = spawn(process.execPath, ['src/server.js'], {
+    env: {
+      ...process.env,
+      PORT: String(P),
+      PUBLIC_URL: 'https://api.tiici.com',
+      FEEDWATCH_BOOTSTRAP_KEY: API_KEY,
+      MAX_MONITORS: '5',
+      FREE_INTERVALS: '900,3600,21600',
+      FEEDWATCH_DATA_DIR: TEST_DATA_DIR,
+      FEEDWATCH_ALLOW_LOCAL_FETCH: '1',
+      // 只把这一项恢复成生产默认值
+      KEY_ISSUE_MAX: '3',
+      KEY_ISSUE_DAILY_MAX: '20',
+      CREATE_MAX: '500',
+      MCP_MAX: '500',
+      GETKEY_IP_MAX: '200',
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  let out = '';
+  sub.stdout.on('data', (d) => { out += d.toString(); });
+  sub.stderr.on('data', (d) => { out += d.toString(); });
+  try {
+    let up = false;
+    for (let i = 0; i < 40; i++) {
+      await delay(150);
+      try { if ((await fetch(`http://127.0.0.1:${P}/health`)).ok) { up = true; break; } } catch { /* 未就绪 */ }
     }
+    assert(up, `限流测试子进程未启动：${out.slice(0, 150)}`);
+    const h = { 'x-api-key': API_KEY, 'content-type': 'application/json' };
+    const codes = [];
+    for (let i = 0; i < 5; i++) {
+      const r = await fetch(`http://127.0.0.1:${P}/v1/apikeys`, {
+        method: 'POST', headers: h, body: JSON.stringify({ label: `限流测试-${i}` }),
+      });
+      await r.text();
+      codes.push(r.status);
+    }
+    const created = codes.filter((c) => c === 201).length;
+    const rejected = codes.filter((c) => c === 429).length;
+    assert(created >= 1 && created <= 3,
+      `短窗口内应只放行 1~3 把（KEY_ISSUE_MAX=3），实际放行 ${created} 把：${codes.join(',')}`);
+    assert(rejected >= 1,
+      `第 4 次起必须被 429 拦住，实际状态码序列 ${codes.join(',')} —— 签发端点限流失效，总配额可被 key 数无限放大`);
+    return `短窗口放行 ${created} 把、拦截 ${rejected} 次（状态码序列 ${codes.join(',')}，真实阈值）`;
+  } finally {
+    sub.kill('SIGTERM');
+    await delay(200);
   }
-
-  return created > 0
-    ? `桶有余量，放行 ${created} 把、拦截 ${rejected} 次（${codes.join(',')}）`
-    : `桶已用满（D9 共享桶的预期行为），5 次全部拦截（${codes.join(',')}）—— 容量受限，防线有效`;
 });
+
 
 await t('引导密钥可进入鉴权区（无死锁）', async () => {
   const r = await get('/v1/monitors', AUTH);
@@ -818,12 +858,12 @@ await t('★ 撞墙事件被记录（付费信号真的落盘了）', async () =
   const key = await selfserviceKey('e2e-limit@example.com');
   for (let i = 1; i <= 5; i++) {
     const r = await post('/v1/monitors', {
-      name: `占位-${i}`, url: `https://news.ycombinator.com/rss?x=${i}`,
+      name: `占位-${i}`, url: `${FIX.url}?x=${i}`,
     }, { 'x-api-key': key });
     assert(r.status === 201, `第 ${i} 个监控点应 201，实际 ${r.status}`);
   }
   const hit = await post('/v1/monitors', {
-    name: '撞墙', url: 'https://news.ycombinator.com/rss?over',
+    name: '撞墙', url: `${FIX.url}?over=1`,
   }, { 'x-api-key': key });
   assert(hit.status === 429, `第 6 个应撞墙 429，实际 ${hit.status}`);
 
@@ -966,6 +1006,7 @@ await t('★ /admin 配了口令后：未登录看登录页、错误口令被拒
 });
 
 child.kill('SIGTERM');
+await FIX.close();
 await delay(300);
 
 console.log(`\n═══ 结果：${pass} 项通过，${fail} 项失败 ═══\n`);

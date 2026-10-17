@@ -107,8 +107,8 @@ const FREE_INTERVALS = (process.env.FREE_INTERVALS ?? '21600')
 const MIN_INTERVAL = Math.min(...FREE_INTERVALS);
 
 /** 监控点创建速率限制：窗口 60s 内最多 10 次 */
-const CREATE_WINDOW_MS = 60_000;
-const CREATE_MAX = 10;
+const CREATE_WINDOW_MS = Number(process.env.CREATE_WINDOW_MS ?? 60_000);
+const CREATE_MAX = Number(process.env.CREATE_MAX ?? 10);
 
 /**
  * API Key 签发限流（2026-07-15 补，此前该端点**完全无限流**）。
@@ -121,10 +121,10 @@ const CREATE_MAX = 10;
  * key 无上限 = 内存监控点、定时器、出网流量全部无上限放大。
  * 业务口径是「每客户一把 Key，泄露只影响单个客户」，5 把足够内部运营使用。
  */
-const KEY_ISSUE_WINDOW_MS = 60_000;
-const KEY_ISSUE_MAX = 3;
+const KEY_ISSUE_WINDOW_MS = Number(process.env.KEY_ISSUE_WINDOW_MS ?? 60_000);
+const KEY_ISSUE_MAX = Number(process.env.KEY_ISSUE_MAX ?? 3);
 const KEY_ISSUE_DAY_MS = 24 * 3600 * 1000;
-const KEY_ISSUE_DAILY_MAX = 20;
+const KEY_ISSUE_DAILY_MAX = Number(process.env.KEY_ISSUE_DAILY_MAX ?? 20);
 
 /**
  * 自助取 Key（GET/POST /get-key）的三层防护阈值。
@@ -139,6 +139,51 @@ const GETKEY_IP_WINDOW_MS = Number(process.env.GETKEY_IP_WINDOW_MS ?? 3600_000);
 const GETKEY_IP_MAX = Number(process.env.GETKEY_IP_MAX ?? 5);       // 同一 IP 每小时
 const GETKEY_DAY_WINDOW_MS = 24 * 3600 * 1000;
 const GETKEY_DAILY_MAX = Number(process.env.GETKEY_DAILY_MAX ?? 60); // 全站每天
+
+/**
+ * 把抓取异常映射成粗分类 —— 只用于埋点与文案，绝不携带 URL 或响应内容。
+ *
+ * 为什么要分类而不是直接用 message：message 里可能含上游域名，
+ * 而 telemetry 的边界是「不记客户数据」。
+ */
+function probeReason(e) {
+  const code = e?.code;
+  if (typeof code === 'string' && ALLOWED_REASONS_FOR_PROBE.has(code)) return code;
+  const msg = String(e?.message ?? '');
+  if (/私有|保留地址|已拒绝/.test(msg)) return 'blocked';
+  if (/RSS|RDF|Atom|feed 结构|XML/i.test(msg)) return 'not_feed';
+  if (/截断|体积上限/.test(msg)) return 'too_large';
+  if (/HTTP\s+\d{3}/.test(msg)) return 'http_error';
+  if (/超时|timeout|ETIMEDOUT/i.test(msg)) return 'timeout';
+  if (/DNS|解析失败|ENOTFOUND/i.test(msg)) return 'dns_fail';
+  if (/url|URL|协议|protocol|仅支持 http/i.test(msg)) return 'invalid_url';
+  return 'unknown';
+}
+
+/** 与 telemetry 的 ALLOWED_REASONS 对齐，避免埋点被丢弃 */
+const ALLOWED_REASONS_FOR_PROBE = new Set([
+  'not_feed', 'http_error', 'timeout', 'too_large', 'blocked',
+  'invalid_url', 'dns_fail', 'unknown',
+]);
+
+/**
+ * 每类失败对应的**下一步指引**。
+ *
+ * ⚠️ 为什么单独一张表：原来的错误信息只说「是什么错了」
+ *   （如「不是有效的 RSS/RDF 结构」），用户不知道该做什么 ——
+ *   这是 2026-10-17 真实用户试用时最大的挫败点。
+ *   错误信息要回答的是「我接下来该怎么办」，不是「你错在哪」。
+ */
+const PROBE_HINTS = {
+  not_feed: '这个地址看起来不是 RSS/Atom/JSON Feed。若它是普通网页，请找它的 feed 地址（试试 /feed、/rss.xml、/atom.xml）；若它确实有 feed，请把该 feed 的完整 URL 发给我们。',
+  http_error: '该地址返回了错误状态。若是普通网页，请改用它的 RSS/Atom 地址；若是临时故障，稍后重试即可。',
+  timeout: '抓取超时。该站点可能响应很慢或有区域限制，我们目前不支持自定义抓取超时。',
+  too_large: 'feed 超过 10 MB 上限，我们不监控这么大的文件。',
+  blocked: '我们拒绝抓取内网或云元数据地址（安全策略）。',
+  dns_fail: '域名解析失败。请确认地址拼写正确、且该域名公网可访问。',
+  invalid_url: '地址格式不对，需以 http:// 或 https:// 开头。',
+  unknown: '请确认该地址是一个可公开访问的 RSS / Atom / JSON Feed。',
+};
 
 /**
  * 允许跨域访问的来源白名单。
@@ -552,7 +597,7 @@ and we will send you a payment link within 1 business day.</p>
         return err(res, 401, 'MCP 端点需要鉴权（请用 x-api-key 头或 Authorization: Bearer）');
       }
 
-      if (!rateLimit(`mcp:${auth.id}`, { windowMs: CREATE_WINDOW_MS, max: 120 })) {
+      if (!rateLimit(`mcp:${auth.id}`, { windowMs: Number(process.env.MCP_WINDOW_MS ?? 60_000), max: Number(process.env.MCP_MAX ?? 120) })) {
     track('api_429', { keyId: auth?.id ?? null, source: 'mcp_ratelimited' });
       return err(res, 429, '请求过于频繁，请稍后再试');
       }
@@ -573,7 +618,11 @@ and we will send you a payment link within 1 business day.</p>
         store,
         apiKeyId: auth.id,
         maxMonitors: MAX_MONITORS,
-        checkOnce: (u) => checkOnce(u, store, null),
+        checkOnce: (u, prev = null) => checkOnce(u, store, prev),
+        schedule: (m, opts) => service.schedule(m, opts),
+        getEphemeralSnapshot: (k, u) => store.getEphemeralSnapshot(k, u),
+        saveEphemeralSnapshot: (k, u, sn) => store.saveEphemeralSnapshot(k, u, sn),
+        clearEphemeralSnapshot: (k, u) => store.clearEphemeralSnapshot(k, u),
       });
       if (body?.method === 'notifications/initialized') { res.writeHead(202); res.end(); return; }
       return json(res, 200, out);
@@ -742,10 +791,52 @@ track('api_429', { keyId: auth?.id ?? null, source: 'key_ratelimited_day' });
           upgrade: `${PUBLIC_URL}/#pricing`,
         });
       }
+
+      // ★ P0-1 修复（2026-10-17）：建点时**当场抓一次**验证 URL。
+      //
+      // 原来的问题：POST 直接建点返回 201，用户以为搞定了，
+      //   但如果 URL 不是 feed（例：普通网页），失败要等到下一次定时检查
+      //   才暴露 —— 实测 `https://www.tiici.com/`（无 feed）就是这样：
+      //   建点 201 ✓ → 数小时后首次检查才报「不是有效的 RSS/RDF 结构」。
+      //   用户等了几小时才知道自己填错了 URL。
+      //
+      // 现在：建点当场验证，不是 feed 就 422 + 明确的下一步指引。
+      //
+      // ⚠️ **顺序：配额 → 预检**（与 MCP 的 create_monitor 一致）。
+      //   预检要出网，若放在配额之前，配额已满的用户每次重试都会先抓一次
+      //   上游再被拒 —— 白烧出网流量，也给上游造成无意义的压力。
+      let probe;
+      try {
+        probe = await checkOnce(body.url, store, null);
+      } catch (e) {
+        const code = probeReason(e);
+        track('create_failed', { keyId: auth.id, reason: code });
+        return err(res, 422, `无法监控该地址：${e.message}`, {
+          code,
+          hint: PROBE_HINTS[code] ?? '请确认该地址是一个可公开访问的 RSS / Atom / JSON Feed。',
+          tried_url: body.url,
+        });
+      }
+
+      // 预检通过：这一轮快照直接当基线，省掉一次重复抓取，
+      // 也让用户立刻看到「首次检查会报什么」
       const m = store.createMonitor({ ...body, apiKeyId: auth.id });
-      service.schedule(m);
+      store.saveSnapshot(m.id, probe.snapshot);
+      // ⚠️ 传完整间隔而非 schedule 默认的 5~60s 钳制值：
+      //   预检刚抓过一次，默认值会在几秒后再抓同一份 —— 白烧出网，
+      //   而且用户会看到「刚建点就有一条变更通知」，那是预检残留造成的假象。
+      service.schedule(m, { firstDelayMs: m.intervalSeconds * 1000 });
       track('monitor_created', { keyId: auth.id, count: owned + 1 });
-      return json(res, 201, view(m));
+      return json(res, 201, {
+        ...view(m),
+        verified: {
+          ok: true,
+          format: probe.format,
+          feed_title: probe.feedTitle,
+          item_count: probe.changes.length,
+          hint: '已验证该地址是可用的 feed，本次结果已作为基线，后续只推送与基线的差异。',
+        },
+      });
     }
 
     /**
