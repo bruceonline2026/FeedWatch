@@ -838,7 +838,6 @@ await t('★ 撞墙事件被记录（付费信号真的落盘了）', async () =
 
 await t('★ 事件日志绝不包含客户数据（隐私承诺的技术担保）', async () => {
   const { readFileSync, readdirSync } = await import('node:fs');
-  const { join } = await import('node:path');
   // ⚠️ 必须用**同一个常量**，不能读 process.env ——
   //   FEEDWATCH_DATA_DIR 是传给子进程的，测试进程自己并没有这个变量。
   //   曾因此让这条测试一直「无日志文件（可跳过）」——
@@ -872,6 +871,98 @@ await t('★ 事件日志绝不包含客户数据（隐私承诺的技术担保�
     '事件日志目录里没有任何文件 —— 说明 track() 静默失败了'
     + '（这条隐私测试就等于没跑）');
   return `已校验 ${files.length} 个日志文件，无客户数据`;
+});
+
+// ---------- 后台管理页 ----------
+
+await t('★ /admin 未配 ADMIN_PASSWORD 时必须404（fail closed）', async () => {
+  // 这是最关键的安全断言：没配口令的部署里，/admin 必须**不存在**，
+  // 而不是「存在但不用口令就能看」——
+  // 后者等于把经营数据（有几个用户、几个人卡在上限）公开给任何访客。
+  const r = await get('/admin');
+  assert(r.status === 404,
+    `未配 ADMIN_PASSWORD 时 /admin 应404，实际 ${r.status}`
+    + ` —— fail closed 失效，等于后台数据对所有人公开`);
+  assert(!/付费信号|撞上限/.test(r.text),
+    `未鉴权时不应泄露经营数据内容`);
+  return `404（fail closed 生效）`;
+});
+
+await t('★ /admin 配了口令后：未登录看登录页、错误口令被拒、正确口令进得去', async () => {
+  // 独立进程，因为主进程故意不配 ADMIN_PASSWORD（测 fail closed）。
+  const P = 3298;
+  const PW = 'admin-test-password-123';
+  const sub = spawn(process.execPath, ['src/server.js'], {
+    env: {
+      ...process.env,
+      PORT: String(P),
+      PUBLIC_URL: 'https://api.tiici.com',
+      FEEDWATCH_BOOTSTRAP_KEY: API_KEY,
+      MAX_MONITORS: '5',
+      FREE_INTERVALS: '900,3600,21600',
+      FEEDWATCH_DATA_DIR: TEST_DATA_DIR,
+      ADMIN_PASSWORD: PW,
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  let out = '';
+  sub.stdout.on('data', (d) => { out += d.toString(); });
+  sub.stderr.on('data', (d) => { out += d.toString(); });
+
+  try {
+    let up = false;
+    for (let i = 0; i < 40; i++) {
+      await delay(150);
+      try { if ((await fetch(`http://127.0.0.1:${P}/health`)).ok) { up = true; break; } } catch { /* 未就绪 */ }
+    }
+    assert(up, `后台测试子进程未启动：${out.slice(0, 150)}`);
+
+    const base = `http://127.0.0.1:${P}/admin`;
+
+    // ① 未登录 → 登录页，且**不能**含经营数据
+    const anon = await fetch(base, { redirect: 'manual' });
+    const anonText = await anon.text();
+    assert(anon.status === 200 && /管理口令/.test(anonText),
+      `未登录应显示登录页，实际 ${anon.status}`);
+    assert(!/撞上限次数/.test(anonText),
+      `**登录页不应含经营数据** —— 未鉴权就看到「撞上限次数」= 数据泄露`);
+
+    // ② 错误口令 → 401，且不能给 cookie
+    const bad = await fetch(base, {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ password: 'wrong-password' }).toString(),
+      redirect: 'manual',
+    });
+    assert(bad.status === 401, `错误口令应 401，实际 ${bad.status}`);
+    assert(!bad.headers.get('set-cookie'), `错误口令不应下发 session cookie`);
+
+    // ③ 正确口令 → 302 + cookie
+    const good = await fetch(base, {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ password: PW }).toString(),
+      redirect: 'manual',
+    });
+    assert(good.status === 302, `正确口令应 302 跳转，实际 ${good.status}`);
+    const setCookie = good.headers.get('set-cookie') ?? '';
+    assert(/fw_admin=/.test(setCookie), `应下发 fw_admin session，实际「${setCookie}」`);
+    assert(/HttpOnly/.test(setCookie), `session cookie 必须 HttpOnly，否则 JS 可读走`);
+
+    // ④ 带 cookie 访问 → 看到经营数据
+    const token = /fw_admin=([A-Za-z0-9_-]+)/.exec(setCookie)?.[1] ?? '';
+    const authed = await fetch(base, { headers: { cookie: `fw_admin=${token}` } });
+    const authedText = await authed.text();
+    assert(/撞上限次数/.test(authedText),
+      `带 cookie 应看到经营数据，实际内容前120字：${authedText.slice(0, 120)}`);
+    assert(!/fw_[0-9a-f]{32}|key_[0-9a-f]{8}/.test(authedText),
+      `后台页面不应出现任何 Key 明细或 id`);
+
+    return `登录页→ 错误口令 401 → 正确口令 302+HttpOnly → 见数据，无 Key 明细`;
+  } finally {
+    sub.kill('SIGTERM');
+    await delay(200);
+  }
 });
 
 child.kill('SIGTERM');

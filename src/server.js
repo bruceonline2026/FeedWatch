@@ -11,6 +11,7 @@ import { handleMcpRequest, serverManifest } from './mcp/endpoint.js';
 import { mcpInfoPage } from './mcp/info-page.js';
 import { getKeyPage, EMAIL_RE } from './mcp/get-key-page.js';
 import { track, summarize } from './telemetry.js';
+import { adminPage, adminEnabled, sessionValid, safeEqualAdmin, newAdminSession, cookieHeader } from './admin/page.js';
 import { isPrivateAddress } from './security/ssrf.js';
 
 const HOST = process.env.HOST ?? '127.0.0.1';
@@ -331,6 +332,53 @@ const server = http.createServer(async (req, res) => {
       });
     }
 
+    // ---------- 后台管理页 ----------
+    //
+    // ⚠️ 放在鉴权区之前是**刻意的**：它有自己的口令+session 鉴权，
+    //    而浏览器打开页面时不会带 x-api-key 头，header 鉴权在这里无效。
+    //
+    // ⚠️ **fail closed**：没配 ADMIN_PASSWORD 时直接 404 ——
+    //    绝不能出现「没配密码 = 等于不鉴权」。
+    if (path === '/admin') {
+      if (!adminEnabled()) {
+        return err(res, 404, '无此端点：' + req.method + ' ' + path);
+      }
+      const html = (status, body, headers = {}) => {
+        res.writeHead(status, {
+          'content-type': 'text/html; charset=utf-8',
+          'cache-control': 'no-store',
+          'x-robots-tag': 'noindex, nofollow',
+          ...headers,
+        });
+        res.end(body);
+      };
+
+      if (req.method === 'GET') {
+        if (!sessionValid(req)) return html(200, adminPage({ stats: null }));
+        return html(200, adminPage({
+          stats: summarize(),
+          extra: {
+            payLinks: (() => { const p = payLinkPool(); return {
+              has_current: Boolean(p.current), standby_count: p.standby.length,
+              needs_new_link: !p.current || p.standby.length === 0 }; })(),
+            liveMonitors: { monitors: store.listMonitors().length },
+          },
+        }));
+      }
+
+      if (req.method === 'POST') {
+        const raw = await readBody(req, 4096);
+        let pw = '';
+        try {
+          pw = String(new URLSearchParams(raw).get('password') ?? '');
+        } catch { /* 非表单 */ }
+        if (!safeEqualAdmin(pw, process.env.ADMIN_PASSWORD ?? '')) {
+          return html(401, adminPage({ stats: null, error: '口令不对' }));
+        }
+        return html(302, '', { location: '/admin', 'set-cookie': cookieHeader(newAdminSession()) });
+      }
+    }
+
     if (path === '/.well-known/mcp.json' || path === '/mcp.json') {
       return json(res, 200, serverManifest(`${PUBLIC_URL}/mcp`, 'https://github.com/your-org/feedwatch'));
     }
@@ -505,7 +553,8 @@ and we will send you a payment link within 1 business day.</p>
       }
 
       if (!rateLimit(`mcp:${auth.id}`, { windowMs: CREATE_WINDOW_MS, max: 120 })) {
-        return err(res, 429, '请求过于频繁，请稍后再试');
+    track('api_429', { keyId: auth?.id ?? null, source: 'mcp_ratelimited' });
+      return err(res, 429, '请求过于频繁，请稍后再试');
       }
 
       const raw = await readBody(req);
@@ -515,7 +564,8 @@ and we will send you a payment link within 1 business day.</p>
       // create_monitor 会写入持久状态，单独按更严格的额度限流
       if (body?.method === 'tools/call' && body?.params?.name === 'create_monitor') {
         if (!rateLimit(`create:${auth.id}`, { windowMs: CREATE_WINDOW_MS, max: CREATE_MAX })) {
-          return err(res, 429, '监控点创建过于频繁，请稍后再试');
+        track('api_429', { keyId: auth?.id ?? null, source: 'create_ratelimited' });
+      return err(res, 429, '监控点创建过于频繁，请稍后再试');
         }
       }
 
@@ -609,6 +659,7 @@ and we will send you a payment link within 1 business day.</p>
 
       // 第一层：滑动窗口，防单账号短时间批量签发
       if (!rateLimit(`apikey:${rootId}`, { windowMs: KEY_ISSUE_WINDOW_MS, max: KEY_ISSUE_MAX })) {
+track('api_429', { keyId: auth?.id ?? null, source: 'key_ratelimited_minute' });
         return err(res, 429, `API Key 签发过于频繁，每 ${KEY_ISSUE_WINDOW_MS / 60000} 分钟最多 ${KEY_ISSUE_MAX} 把`, {
           retry_after_seconds: KEY_ISSUE_WINDOW_MS / 1000,
         });
@@ -616,6 +667,7 @@ and we will send you a payment link within 1 business day.</p>
 
       // 第二层：日配额，防跨天持续刷
       if (!rateLimit(`apikey-day:${rootId}`, { windowMs: KEY_ISSUE_DAY_MS, max: KEY_ISSUE_DAILY_MAX })) {
+track('api_429', { keyId: auth?.id ?? null, source: 'key_ratelimited_day' });
         return err(res, 429, `API Key 日签发上限 ${KEY_ISSUE_DAILY_MAX} 把，已达上限`, {
           retry_after_seconds: KEY_ISSUE_DAY_MS / 1000,
           hint: '若需更多 Key 请联系（当前每客户一把，泄露只影响单个客户）',

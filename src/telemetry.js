@@ -146,6 +146,8 @@ export function summarize() {
         acc.fail_reasons[row.r ?? 'unknown'] = (acc.fail_reasons[row.r ?? 'unknown'] ?? 0) + 1;
       } else if (row.ev === 'api_429') {
         acc.other_429 += 1;
+        const k2 = row.s ?? 'unknown';
+        acc.r429_reasons[k2] = (acc.r429_reasons[k2] ?? 0) + 1;
       }
     }
   }
@@ -187,6 +189,7 @@ function emptySummary() {
     check_failed: 0,
     other_429: 0,
     fail_reasons: {},
+    r429_reasons: {},
     conversion_signal: null,
   };
 }
