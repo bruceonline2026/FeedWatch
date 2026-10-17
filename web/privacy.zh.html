@@ -86,6 +86,36 @@ footer{border-top:1px solid var(--border);padding:24px 0;color:var(--text-3);fon
     <tr><td>服务器访问日志</td><td>请求路径、状态码、IP、时间戳 —— <strong>不含请求体</strong></td><td>按主机配置</td></tr>
   </table>
 
+  <h2>我们额外记录了什么（计数，不含你的数据）</h2>
+
+  <p>为了让产品能用下去，我们需要知道「有多少人在用、有多少人卡住了」。
+     所以会记录一些<strong>纯计数类</strong>信息：</p>
+
+  <table>
+    <tr><th>记什么</th><th>形式</th><th>为什么</th></tr>
+    <tr><td>领了 API Key 的动作</td><td>事件类型 + 时间 + Key 的随机 id</td><td>知道有多少用户在用</td></tr>
+    <tr><td>建了监控点的动作</td><td>同上 + 当前已有几个</td><td>知道功能是否被真正使用</td></tr>
+    <tr><td><strong>撞到 5 个上限</strong></td><td>同上 + 当时已有几个</td><td>知道有多少人需要更多配额</td></tr>
+    <tr><td>建监控点失败</td><td>失败<strong>分类</strong>（非内容，如「不是 feed」）</td><td>发现产品缺口</td></tr>
+  </table>
+
+  <div class="callout">
+    <p><strong>这些记录里<em>没有</em>：</strong></p>
+    <p>· 你的监控点 URL<br>
+       · feed 标题 / 正文 / 作者<br>
+       · 检出的变更内容<br>
+       · 你的邮箱地址<br>
+       · API Key（明文或哈希）<br>
+       · 请求头、浏览器指纹、来源 IP</p>
+    <p>也就是说：<strong>我们知道「有 3 个人卡在了上限上」，
+       但不知道那 3 个人是谁、监控的是什么网站。</strong></p>
+  </div>
+
+  <h3>为什么值得说明</h3>
+  <p>市面上的监控工具普遍会埋第三方追踪器。我们不用 ——
+     所以这个「我们额外记了什么」的清单，<strong>就是全部内容</strong>，
+     没有藏在别处的第二套统计。你可以要求我们删掉你的记录。</p>
+
   <h2>三点值得单独说明</h2>
 
   <h3>你的 API Key 从不以明文存储</h3>

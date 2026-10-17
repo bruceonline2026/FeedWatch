@@ -4,6 +4,8 @@
  */
 import { spawn } from 'node:child_process';
 import { setTimeout as delay } from 'node:timers/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 const PORT = 3199;
 const B = `http://127.0.0.1:${PORT}`;
@@ -15,6 +17,9 @@ const B = `http://127.0.0.1:${PORT}`;
  */
 const API_KEY = 'fw_e2e_test_bootstrap_key_at_least_32_chars';
 const AUTH = { 'x-api-key': API_KEY };
+
+// 测试的事件日志目录 —— 用系统临时目录，绝不能写进项目或生产路径
+const TEST_DATA_DIR = join(tmpdir(), `feedwatch-e2e-${process.pid}`);
 
 console.log('\n═══ 端到端测试（同进程） ═══\n');
 
@@ -28,6 +33,16 @@ const child = spawn(process.execPath, ['src/server.js'], {
     // 生产是 5 / 21600；测试里放开频率限制，才好测900/3600/21600 三档行为。
     MAX_MONITORS: '5',
     FREE_INTERVALS: '900,3600,21600',
+    // ⚠️ 事件日志必须落到临时目录：
+    //   ① 否则本机跑到 /opt/feedwatch/data 会因权限失败而静默跳过（测不到东西）
+    //   ② 更重要 —— 测试绝不能污染生产的运营数据
+    FEEDWATCH_DATA_DIR: TEST_DATA_DIR,
+    // 放开自助领 Key 的额度：多个测试各自领一把，若共用 5 把/小时的桶，
+    // 后面的测试会因顺序不同而随机失败（测试不应依赖执行顺序）。
+    // 限流本身由「★ /get-key 有 IP 限流」那条测试单独验证 —— 它临时用
+    // 自己起的第二个服务进程测，不受这里影响。
+    GETKEY_IP_MAX: '200',
+    GETKEY_DAILY_MAX: '500',
   },
   stdio: ['ignore', 'pipe', 'pipe'],
 });
@@ -674,20 +689,58 @@ await t('★ /get-key 拒绝非法邮箱且不发 Key', async () => {
   return '400 拒绝，未签发';
 });
 
-await t('★ /get-key 有 IP 限流（连续签发会被拦住）', async () => {
-  // 前两个测试已消耗 2 把，本测试再连签若干把 → 应触发 5 把/小时的上限
-  const codes = [];
-  for (let i = 0; i < 8; i++) {
-    const r = await postRaw('/get-key', JSON.stringify({ email: `burst${i}@example.com` }));
-    codes.push(r.status);
-    if (r.status === 429) break;
+await t('★ /get-key 有 IP 限流（独立进程，真实阈值）', async () => {
+  // ⚠️ 主测试进程把 GETKEY_IP_MAX 放开到200（避免测试间抢配额），
+  //   所以这条必须**另起一个进程**用生产真实阈值（5 把/小时）来测。
+  //   否则就是「测试了被改大的值」——测了个假绿。
+  const P = 3299;
+  const sub = spawn(process.execPath, ['src/server.js'], {
+    env: {
+      ...process.env,
+      PORT: String(P),
+      PUBLIC_URL: 'https://api.tiici.com',
+      FEEDWATCH_BOOTSTRAP_KEY: API_KEY,
+      MAX_MONITORS: '5',
+      FREE_INTERVALS: '900,3600,21600',
+      FEEDWATCH_DATA_DIR: TEST_DATA_DIR,
+      // 只覆盖 IP 阈值，日上限留默认 60 —— 本次只需 6 次签发
+      GETKEY_IP_MAX: '5',
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  let subOut = '';
+  sub.stdout.on('data', (d) => { subOut += d.toString(); });
+  sub.stderr.on('data', (d) => { subOut += d.toString(); });
+
+  try {
+    let up = false;
+    for (let i = 0; i < 40; i++) {
+      await delay(150);
+      try { if ((await fetch(`http://127.0.0.1:${P}/health`)).ok) { up = true; break; } } catch { /* 未就绪 */ }
+    }
+    assert(up, `限流测试用的子进程未启动：${subOut.slice(0, 150)}`);
+
+    const codes = [];
+    for (let i = 0; i < 8; i++) {
+      const r = await fetch(`http://127.0.0.1:${P}/get-key`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ email: `burst${i}@example.com` }),
+      });
+      await r.text();
+      codes.push(r.status);
+      if (r.status === 429) break;
+    }
+    const ok = codes.filter((c) => c === 200).length;
+    assert(codes.includes(429),
+      `连签必须被限流拦住，实际状态码序列 ${codes.join(',')} —— 公开端点无 IP 限流 = 无限 Key 机器`);
+    assert(ok === 5,
+      `阈值是 5 把/小时，应恰好放行 5 把，实际放行 ${ok} 把（状态码 ${codes.join(',')}）`);
+    return `恰好放行 ${ok} 把后被 429 拦住（真实阈值）`;
+  } finally {
+    sub.kill('SIGTERM');
+    await delay(200);
   }
-  assert(codes.includes(429),
-    `连续签发必须被限流拦住，实际状态码序列 ${codes.join(',')} —— 公开端点无 IP 限流 = 无限 Key 机器`);
-  const last = codes.at(-1);
-  assert(last === 429 || codes.filter((c) => c === 200).length <= 6,
-    `放行数量应受限（≤6），实际 ${codes.filter((c) => c === 200).length} 把`);
-  return `放行 ${codes.filter((c) => c === 200).length} 把后被 429 拦住`;
 });
 
 await t('★ /get-key 页面不泄露内部信息', async () => {
@@ -725,6 +778,100 @@ await t('★ 付款链接库存端点需要鉴权（内部信息不外泄）', a
   assert(!JSON.stringify(withAuth.json).includes('link.payoneer.com'),
     '**绝不能返回 URL 原文** —— 那等于把备用链接送给任何拿到 Key 的人');
   return '无 Key 401；有 Key 返回数量但不含 URL';
+});
+
+// ---------- 运营统计（付费信号）----------
+
+/**
+ * 领一把自助 Key 并返回明文。
+ *
+ * 为什么单独抽出来：前面的限流测试会消耗 IP 配额，
+ * 所以每个需要 Key 的测试都自己领一把，避免依赖执行顺序。
+ */
+const selfserviceKey = async (email) => {
+  const r = await postRaw('/get-key', JSON.stringify({ email }));
+  return r.text.match(/fw_[0-9a-f]{32}/)?.[0] ?? '';
+};
+
+await t('★ /v1/stats 需要鉴权（付费潜力是内部信息）', async () => {
+  const noAuth = await get('/v1/stats');
+  assert(noAuth.status === 401,
+    `/v1/stats 无 Key 应 401，实际 ${noAuth.status} —— 撞墙人数属内部经营数据`);
+  const withAuth = await get('/v1/stats', AUTH);
+  assert(withAuth.status === 200, `有 Key 应 200，实际 ${withAuth.status}`);
+  assert(withAuth.json?.conversion_signal,
+    '**应包含 conversion_signal** —— 没有它这个端点就没有意义');
+  return '无 Key 401；有 Key 返回聚合计数';
+});
+
+await t('★ /v1/stats 不返回任何 Key 明细', async () => {
+  const r = await get('/v1/stats', AUTH);
+  const body = JSON.stringify(r.json);
+  // 即便是引导密钥也不该拿到「谁撞过墙」的明细
+  assert(!/key_[0-9a-f]{8}/.test(body),
+    `响应里出现了 Key id 明细：${body.slice(0, 200)} —— 明细会让日志文件扩大暴露面`);
+  return '只有聚合计数，无 Key 列表';
+});
+
+await t('★ 撞墙事件被记录（付费信号真的落盘了）', async () => {
+  // 先建满 5 个监控点，第 6 个必然 429
+  const key = await selfserviceKey('e2e-limit@example.com');
+  for (let i = 1; i <= 5; i++) {
+    const r = await post('/v1/monitors', {
+      name: `占位-${i}`, url: `https://news.ycombinator.com/rss?x=${i}`,
+    }, { 'x-api-key': key });
+    assert(r.status === 201, `第 ${i} 个监控点应 201，实际 ${r.status}`);
+  }
+  const hit = await post('/v1/monitors', {
+    name: '撞墙', url: 'https://news.ycombinator.com/rss?over',
+  }, { 'x-api-key': key });
+  assert(hit.status === 429, `第 6 个应撞墙 429，实际 ${hit.status}`);
+
+  // 统计里应能看到这次撞墙
+  const stats = await get('/v1/stats', AUTH);
+  assert(stats.json?.limit_hits >= 1,
+    `limit_hits 应 ≥1，实际 ${stats.json?.limit_hits} —— 撞墙没被记录 = 付费信号丢了`);
+  assert(stats.json?.conversion_signal?.users_hit_limit >= 1,
+    `users_hit_limit 应 ≥1，实际 ${stats.json?.conversion_signal?.users_hit_limit}`);
+  return `已记录 ${stats.json.limit_hits} 次撞墙`;
+});
+
+await t('★ 事件日志绝不包含客户数据（隐私承诺的技术担保）', async () => {
+  const { readFileSync, readdirSync } = await import('node:fs');
+  const { join } = await import('node:path');
+  // ⚠️ 必须用**同一个常量**，不能读 process.env ——
+  //   FEEDWATCH_DATA_DIR 是传给子进程的，测试进程自己并没有这个变量。
+  //   曾因此让这条测试一直「无日志文件（可跳过）」——
+  //   **又一处空转检查：看起来在跑，实际什么都没测到。**
+  let files = [];
+  try { files = readdirSync(TEST_DATA_DIR).filter((f) => f.endsWith('.jsonl')); } catch { /* 无文件 */ }
+
+  for (const f of files) {
+    const content = readFileSync(join(TEST_DATA_DIR, f), 'utf8');
+    // 隐私政策承诺「监控点URL、feed 内容、变更只在内存中」——
+    // 这条测试是那句话的技术担保，漏一个字段就是承诺失效。
+    assert(!/ycombinator\.com/.test(content),
+      `${f} 出现了监控点 URL —— 违反隐私政策的「不存储」承诺`);
+    assert(!/@example\.com/.test(content),
+      `${f} 出现了邮箱 —— 不该记录用户邮箱`);
+    assert(!/fw_[0-9a-f]{32}/.test(content),
+      `${f} 出现了 API Key 明文`);
+    assert(!/Hacker News|标题|正文/.test(content),
+      `${f} 出现了 feed 内容`);
+    // 只允许这些字段
+    for (const line of content.split('\n').filter(Boolean)) {
+      const row = JSON.parse(line);
+      const extra = Object.keys(row).filter((k) => !['ts', 'ev', 'k', 'c', 'r', 's'].includes(k));
+      assert(extra.length === 0,
+        `${f} 出现了未授权字段 ${extra.join(',')} —— 字段白名单必须只增不减地严守`);
+    }
+  }
+  // ⚠️ 不允许「无文件就跳过」—— 那正是本条测试曾经空转的原因。
+  //   没有日志 = track() 根本没工作 = 必须红。
+  assert(files.length > 0,
+    '事件日志目录里没有任何文件 —— 说明 track() 静默失败了'
+    + '（这条隐私测试就等于没跑）');
+  return `已校验 ${files.length} 个日志文件，无客户数据`;
 });
 
 child.kill('SIGTERM');

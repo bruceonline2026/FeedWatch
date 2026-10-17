@@ -10,6 +10,7 @@ import { MemoryStore, MonitorService, checkOnce, INTERVALS } from './service.js'
 import { handleMcpRequest, serverManifest } from './mcp/endpoint.js';
 import { mcpInfoPage } from './mcp/info-page.js';
 import { getKeyPage, EMAIL_RE } from './mcp/get-key-page.js';
+import { track, summarize } from './telemetry.js';
 import { isPrivateAddress } from './security/ssrf.js';
 
 const HOST = process.env.HOST ?? '127.0.0.1';
@@ -133,10 +134,10 @@ const KEY_ISSUE_DAILY_MAX = 20;
  * 为什么按 IP 限流是主防线：邮箱可以随便填，用邮箱当限流键等于没限。
  * IP 才是真实的资源成本单位。
  */
-const GETKEY_IP_WINDOW_MS = 3600_000;
-const GETKEY_IP_MAX = 5;          // 同一 IP 每小时 5 把
+const GETKEY_IP_WINDOW_MS = Number(process.env.GETKEY_IP_WINDOW_MS ?? 3600_000);
+const GETKEY_IP_MAX = Number(process.env.GETKEY_IP_MAX ?? 5);       // 同一 IP 每小时
 const GETKEY_DAY_WINDOW_MS = 24 * 3600 * 1000;
-const GETKEY_DAILY_MAX = 60;      // 全站每天 60 把
+const GETKEY_DAILY_MAX = Number(process.env.GETKEY_DAILY_MAX ?? 60); // 全站每天
 
 /**
  * 允许跨域访问的来源白名单。
@@ -420,6 +421,9 @@ const server = http.createServer(async (req, res) => {
         // → 与内部引导密钥签发的 Key 同源，但**不能签发新 Key**（D8 门控仍生效）
         const label = `selfservice:${email.split('@')[1] ?? 'unknown'}`;
         const k = store.createApiKey(label, { parentId: bootstrapId, isBootstrap: false });
+        // ⚠️ **只记 key.id，不记邮箱、不记域名**
+        //   label 里含邮箱域名，但那是内存里的 Key 记录，不进事件日志。
+        track('key_issued', { keyId: k.id, source: 'selfservice' });
 
         res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
         return res.end(getKeyPage({
@@ -533,6 +537,7 @@ and we will send you a payment link within 1 business day.</p>
       /^\/v1\/monitors\/[^/]+$/,
       /^\/v1\/monitors\/[^/]+\/check$/,
       /^\/v1\/pay-links$/,
+      /^\/v1\/stats$/,
     ];
     if (!KNOWN.some((re) => re.test(path))) {
       return err(res, 404, `无此端点：${req.method} ${path}`);
@@ -556,6 +561,25 @@ and we will send you a payment link within 1 business day.</p>
         total: (current ? 1 : 0) + standby.length,
         // 库存耗尽必须能一眼看出 —— 否则会一直撞「already paid」
         needs_new_link: !current || standby.length === 0,
+      });
+    }
+
+    // ---------- 运营统计（需鉴权） ----------
+    //
+    // ⚠️ 与 /v1/pay-links 同理，放在鉴权区之内：
+    //   「有几个人卡在 5 个监控点上限上」是**付费潜力的直接指标**，
+    //   属于内部经营信息，不能让任何访客看到。
+    //
+    // 只返回**聚合计数**，不返回任何 Key id 明细 ——
+    // 这样即使响应被截获，也拿不到「谁撞过墙」，
+    // 日志文件本身也不会因为这个端点而扩大暴露面。
+    if (path === '/v1/stats' && req.method === 'GET') {
+      return json(res, 200, {
+        ...summarize(),
+        note:
+          'conversion_signal 是最重要的一块：users_hit_users > 0 说明确实有人'
+          + '想要更多监控点 → 付费档值得上线；= 0 则说明 5 个可能太宽松，或产品本身没被需要。'
+          + '本端点只返回聚合计数，不含任何 Key 明细或客户数据。',
       });
     }
 
@@ -625,9 +649,17 @@ and we will send you a payment link within 1 business day.</p>
       }
       const raw = await readBody(req);
       let body;
-      try { body = JSON.parse(raw); } catch { return err(res, 400, 'JSON 解析失败'); }
-      if (!body.url) return err(res, 422, '缺少 url 字段');
+      try { body = JSON.parse(raw); } catch {
+        track('create_failed', { keyId: auth.id, reason: 'unknown' });
+        return err(res, 400, 'JSON 解析失败');
+      }
+      if (!body.url) {
+        track('create_failed', { keyId: auth.id, reason: 'invalid_url' });
+        return err(res, 422, '缺少 url 字段');
+      }
       if (typeof body.url !== 'string' || body.url.length > 2048) {
+        // ⚠️ 只记「url 无效」这个分类，**绝不记 url 本身**
+        track('create_failed', { keyId: auth.id, reason: 'invalid_url' });
         return err(res, 422, 'url 无效或过长');
       }
 
@@ -650,6 +682,9 @@ and we will send you a payment link within 1 business day.</p>
       // 配额：/v1/usage 声明了 limit.monitors，此前完全没有强制
       const owned = store.listMonitors().filter((m) => m.apiKeyId === auth.id).length;
       if (owned >= MAX_MONITORS) {
+        // ⭐ 唯一的付费信号：用户已经知道「我想要更多」，正卡在这。
+        //   只记 keyId 与计数，不记 URL/正文 —— 边界见 src/telemetry.js
+        track('limit_hit', { keyId: auth.id, count: owned });
         return err(res, 429, `监控点数量已达上限（${MAX_MONITORS}）`, {
           hint: '免费层最多 ' + MAX_MONITORS + ' 个监控点。付费档位可放宽至 25 / 100。',
           upgrade: `${PUBLIC_URL}/#pricing`,
@@ -657,6 +692,7 @@ and we will send you a payment link within 1 business day.</p>
       }
       const m = store.createMonitor({ ...body, apiKeyId: auth.id });
       service.schedule(m);
+      track('monitor_created', { keyId: auth.id, count: owned + 1 });
       return json(res, 201, view(m));
     }
 

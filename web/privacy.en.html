@@ -91,7 +91,37 @@ footer{border-top:1px solid var(--border);padding:24px 0;color:var(--text-3);fon
     <tr><td>Server access logs</td><td>Request path, status, IP, timestamp — <strong>no request bodies</strong></td><td>As configured on the host</td></tr>
   </table>
 
-  <h2>Three things worth calling out</h2>
+
+  <h2>What we additionally record (counts only, never your data)</h2>
+
+  <p>To keep the product running we need to know how many people use it and how
+     many get stuck. So we record some <strong>purely aggregate</strong> facts:</p>
+
+  <table>
+    <tr><th>What</th><th>Form</th><th>Why</th></tr>
+    <tr><td>Requesting an API key</td><td>Event type + timestamp + random key id</td><td>To know how many people use it</td></tr>
+    <tr><td>Creating a monitor</td><td>Same + current monitor count</td><td>To know whether the feature is actually used</td></tr>
+    <tr><td><strong>Hitting the 5-monitor limit</strong></td><td>Same + count at the time</td><td>To know how many people need more quota</td></tr>
+    <tr><td>Monitor creation failure</td><td>Failure <strong>category</strong> (not content, e.g. "not_feed")</td><td>To find product gaps</td></tr>
+  </table>
+
+  <div class="callout">
+    <p><strong>These records contain <em>none</em> of:</strong></p>
+    <p>&middot; your monitor URLs<br>
+       &middot; feed titles, bodies or authors<br>
+       &middot; the changes we detect<br>
+       &middot; your email address<br>
+       &middot; your API key (plaintext or hash)<br>
+       &middot; request headers, browser fingerprint or source IP</p>
+    <p>In other words: <strong>we know that 3 people hit the limit,
+       but not who they are or what sites they monitor.</strong></p>
+  </div>
+
+  <h3>Why this deserves its own section</h3>
+  <p>Most monitoring tools embed third-party trackers. We do not &mdash; so this
+     list <strong>is the complete inventory</strong>; there is no second,
+     hidden analytics system. You can ask us to delete your records.</p>
+
 
   <h3>Your API key is never stored in plaintext</h3>
   <p>When you create a key, the response contains it <strong>exactly once</strong>.
