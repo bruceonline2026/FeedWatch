@@ -11,6 +11,7 @@ import { handleMcpRequest, serverManifest } from './mcp/endpoint.js';
 import { mcpInfoPage } from './mcp/info-page.js';
 import { getKeyPage, EMAIL_RE } from './mcp/get-key-page.js';
 import { track, summarize } from './telemetry.js';
+import { PersistentStore } from './persistence.js';
 import { adminPage, adminEnabled, sessionValid, safeEqualAdmin, newAdminSession, cookieHeader } from './admin/page.js';
 import { isPrivateAddress } from './security/ssrf.js';
 
@@ -200,7 +201,35 @@ const ALLOWED_ORIGINS = new Set(
     .filter(Boolean)
 );
 
-export const store = new MemoryStore();
+/**
+ * 持久化：监控点 / 快照基线 / API Key
+ *
+ * ⚠️ 之前全部只在内存里，`systemctl restart feedwatch` 之后：
+ *   · 客户的监控点消失 —— 告警静默停止，客户不知道
+ *   · **快照基线丢失 → 重启后首次检查把所有条目当「新增」，全是假告警**
+ *   · 客户 API Key 失效 → 必须重新配置
+ *
+ * 「客户少就可以不存」是不成立的：任何一次升级、补丁、重启都会清空，
+ * 而监控服务的价值恰恰是**长期稳定地不漏报**。
+ *
+ * 落盘用零依赖的 JSON 文件（取舍见 src/persistence.js）：
+ * 生产 Node v22.23.3 的 `node:sqlite` 仍是实验性模块，不能作依赖。
+ */
+const DATA_FILE = process.env.FEEDWATCH_DB ?? '/opt/feedwatch/data/store.json';
+const persistence = process.env.FEEDWATCH_PERSIST === 'off'
+  ? null
+  : new PersistentStore(DATA_FILE);
+
+export const store = new MemoryStore({ persistence });
+
+if (persistence) {
+  const restored = store.restore(persistence.load());
+  console.log(
+    `[feedwatch] 已从 ${DATA_FILE} 恢复：`
+    + `${restored.monitors} 个监控点 · ${restored.snapshots} 份快照 · ${restored.apikeys} 把 Key`,
+  );
+}
+
 const service = new MonitorService(store, { maxMonitors: MAX_MONITORS });
 
 /**
@@ -227,6 +256,29 @@ if (BOOTSTRAP_KEY) {
   console.log('[feedwatch] 已载入引导密钥（来自 FEEDWATCH_BOOTSTRAP_KEY）');
 }
 service.startAll();
+
+/**
+ * 退出前同步刷盘。
+ *
+ * ⚠️ 平时靠 markDirty 的 setImmediate 落盘，但**退出路径必须再兜一次**：
+ *   setImmediate 队列可能还没跑完进程就结束了，最后一批变更就丢了。
+ *   systemd 的 restart/stop 走的是 SIGTERM，所以这个钩子是必需的。
+ *
+ * 两次信号都注册：SIGTERM（正常停止）/ SIGINT（Ctrl+C、手动 kill）。
+ */
+for (const sig of ['SIGTERM', 'SIGINT']) {
+  process.on(sig, () => {
+    const ok = store.persistNow();
+    console.log(`[feedwatch] 收到 ${sig}，已${ok ? '刷盘' : '尝试刷盘（见上方告警）'}，退出`);
+    process.exit(0);
+  });
+}
+// 未捕获异常也先刷盘：崩之前能存住多少是多少
+process.on('uncaughtException', (e) => {
+  console.error('[feedwatch] 未捕获异常：', e);
+  try { store.persistNow(); } catch { /* 刷盘失败不掩盖原始错误 */ }
+  process.exit(1);
+});
 
 const startedAt = new Date().toISOString();
 const version = '0.1.0';
@@ -436,7 +488,10 @@ const server = http.createServer(async (req, res) => {
             payLinks: (() => { const p = payLinkPool(); return {
               has_current: Boolean(p.current), standby_count: p.standby.length,
               needs_new_link: !p.current || p.standby.length === 0 }; })(),
-            liveMonitors: { monitors: store.listMonitors().length },
+            liveMonitors: {
+              monitors: store.listMonitors().length,
+              uptimeDays: Math.floor(process.uptime() / 86400),
+            },
           },
         }));
       }

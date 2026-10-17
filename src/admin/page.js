@@ -323,8 +323,9 @@ ${login}
     ], { caption: '功能调用' })}
     ${dataTable([
       { label: '其他 429', value: stats.other_429, hint: '限流命中（非撞墙）' },
-      { label: '当前内存中', value: live?.monitors ?? '—', hint: '重启即清空' },
-      { label: '累计事件', value: stats.events_total ?? '—', hint: '日志文件中的事件总数' },
+      { label: '运行中监控点', value: live?.monitors ?? '—', hint: '已落盘，重启不丢' },
+      { label: '累计事件', value: stats.events_total ?? '—', hint: '统计日志中的事件总数' },
+      { label: '服务运行天数', value: live?.uptimeDays ?? '—', hint: '本次进程（非历史）' },
     ], { caption: '运行状态' })}
   </div>
 </div>
@@ -364,7 +365,8 @@ ${login}
 <div class="card">
   <h2>数据边界</h2>
   ${dataTable([
-    { label: '数据来源', value: '<code>/opt/feedwatch/data/events-*.jsonl</code>' },
+    { label: '统计来源', value: '<code>/opt/feedwatch/data/events-*.jsonl</code>' },
+    { label: '客户数据存储', value: '<code>/opt/feedwatch/data/store.json</code>', hint: '监控点·快照·Key 哈希，重启不丢' },
     { label: '记录天数', value: `${stats.days ?? 0} 天`, hint: `${stats.first_day ?? '—'} 至 ${stats.last_day ?? '—'}` },
     { label: '含客户数据？', value: '<span class="pill ok">否</span>', hint: '无 URL / feed 正文 / 邮箱 / API Key' },
     { label: '统计端点', value: '<code>GET /v1/stats</code>', hint: '需 API Key，返回同一份数据' },

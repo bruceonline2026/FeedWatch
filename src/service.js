@@ -27,14 +27,84 @@ const MAX_FEED_BYTES = 10 * 1024 * 1024;
  */
 const EPHEMERAL_SNAPSHOT_PER_KEY = 20;
 
-/** 内存存储（MVP 阶段用；生产换 SQLite/Postgres） */
+/**
+ * 持久化存储（2026-10-17 从纯内存改为落盘）
+ *
+ * ⚠️ 之前所有状态只在内存里，`systemctl restart feedwatch` 后：
+ *   · 客户的监控点全部消失 —— 告警静默停止，客户不知道
+ *   · **快照基线丢失 → 重启后首次检查把所有条目当「新增」，全是假告警**
+ *   · API Key 失效 → 客户必须重新配置
+ *
+ * 那不是「客户少就能省的功能」—— 监控服务把客户数据只放内存，
+ * 任何一次升级/补丁/重启都会清空，产品本身就不成立。
+ *
+ * 落盘用零依赖的 JSON 文件（见 src/persistence.js 的取舍说明）：
+ * 生产 Node v22.23.3 的 `node:sqlite` 仍是实验性模块，不能作为依赖；
+ * 几百条监控点的量级下「变更即全量重写」完全够用。
+ */
 export class MemoryStore {
-  constructor() {
+  /**
+   * @param {object} opts
+   * @param {import('./persistence.js').PersistentStore} [opts.persistence] 不传则纯内存（测试用）
+   */
+  constructor({ persistence = null } = {}) {
     this.monitors = new Map();
     this.snapshots = new Map();
     this.apikeys = new Map();
-    /** check_feed 的临时快照，与 monitors 的快照互不影响 */
+    /** check_feed 的临时快照，与 monitors 的快照互不影响。
+     *  **刻意不持久化**：它是「上一次查询」的临时上下文，
+     *  且含 feed 正文哈希 —— 落盘就违背了「客户数据只在内存」的承诺。
+     *  丢失的后果只是下一次 check_feed 重新基线化，可接受。 */
     this.ephemeralSnapshots = new Map();
+    this.persistence = persistence;
+  }
+
+  /** 把当前状态导出为可序列化结构（API Key 只存哈希，从不存明文） */
+  serialize() {
+    return {
+      apikeys: [...this.apikeys.values()],
+      monitors: [...this.monitors.values()],
+      // 快照只存比对所需的最小信息；items 的原始字段经 fromJSON 还原
+      snapshots: [...this.snapshots.entries()].map(([id, s]) => ({
+        id,
+        json: typeof s?.toJSON === 'function' ? s.toJSON() : s,
+      })),
+    };
+  }
+
+  /** 从持久化数据恢复。损坏的条目单独跳过，不影响其余恢复 */
+  restore(data) {
+    if (!data) return { apikeys: 0, monitors: 0, snapshots: 0 };
+    let a = 0; let m = 0; let sn = 0;
+
+    for (const rec of data.apikeys ?? []) {
+      if (!rec?.hash || !rec?.id) continue;
+      this.apikeys.set(rec.hash, rec);
+      a += 1;
+    }
+    for (const mon of data.monitors ?? []) {
+      if (!mon?.id) continue;
+      this.monitors.set(mon.id, mon);
+      m += 1;
+    }
+    for (const s of data.snapshots ?? []) {
+      if (!s?.id || !s?.json) continue;
+      try {
+        this.snapshots.set(s.id, Snapshot.fromJSON(s.json));
+        sn += 1;
+      } catch { /* 单条损坏不该阻断整体恢复 */ }
+    }
+    return { apikeys: a, monitors: m, snapshots: sn };
+  }
+
+  /** 标记有变更，请求落盘 */
+  persist() {
+    this.persistence?.markDirty(() => this.persistence.save(this.serialize()));
+  }
+
+  /** 进程退出前同步刷盘 */
+  persistNow() {
+    return this.persistence?.flush(() => this.serialize()) ?? true;
   }
 
   createMonitor({ url, name, intervalSeconds, keywords, apiKeyId }) {
@@ -53,6 +123,8 @@ export class MemoryStore {
       createdAt: new Date().toISOString(),
       lastCheckedAt: null,
       lastChangeAt: null,
+      // ⚠️ 重启后立刻重排检查（用 5~60s 钳制）—— 不能沿用旧的 nextCheckAt，
+      //    那个时间点可能已过去很久，schedule() 会算出负延迟。
       nextCheckAt: new Date(Date.now() + 60_000).toISOString(),
       errorCount: 0,
       lastError: null,
@@ -61,6 +133,7 @@ export class MemoryStore {
       channels: [],
     };
     this.monitors.set(id, m);
+    this.persist();
     return m;
   }
 
@@ -69,7 +142,9 @@ export class MemoryStore {
   /** 删除监控点并回收其快照 */
   deleteMonitor(id) {
     this.snapshots.delete(id);   // 快照与监控点生命周期一致，避免长期运行内存泄漏
-    return this.monitors.delete(id);
+    const ok = this.monitors.delete(id);
+    this.persist();
+    return ok;
   }
 
   updateMonitor(id, patch) {
@@ -91,13 +166,30 @@ export class MemoryStore {
       }
     }
     if (Array.isArray(patch.channels)) m.channels = patch.channels;
+    this.persist();
     return m;
   }
 
   getSnapshot(id) { return this.snapshots.get(id); }
-  saveSnapshot(id, snap) { this.snapshots.set(id, snap); }
+
+  /**
+   * 保存快照基线。
+   *
+   * ⚠️ **必须落盘** —— 快照是「字段级 diff」的唯一依据。
+   *   丢了它，重启后首次检查会把所有条目当「新增」，
+   *   客户收到的是一整片假告警（这是 2026-10-17 修 P0 时确认的高影响场景）。
+   */
+  saveSnapshot(id, snap) {
+    this.snapshots.set(id, snap);
+    this.persist();
+  }
+
   /** ★ 删除监控点时一并回收快照，否则 snapshots Map 永久增长（内存泄漏） */
-  deleteSnapshot(id) { return this.snapshots.delete(id); }
+  deleteSnapshot(id) {
+    const ok = this.snapshots.delete(id);
+    this.persist();
+    return ok;
+  }
 
   /**
    * ★ 临时快照：check_feed 用（2026-10-17 修 P0-2）
@@ -199,11 +291,15 @@ export class MemoryStore {
     const hash = createHash('sha256').update(raw).digest('hex');
     this.apikeys.set(hash, {
       id,
+      // ⚠️ **只存哈希，绝不存明文** —— 落盘也不改变这条：
+      //   客户 Key 重启后仍可用（哈希能比对），但拿到数据文件的人无法反推明文。
+      hash,
       label: label ?? '',
       createdAt: new Date().toISOString(),
       parentId,          // ← 签发者；null = 根 Key
       isBootstrap,       // ← 仅引导密钥为 true，吊销时必须保护
     });
+    this.persist();
     return { id, raw };
   }
 
@@ -221,14 +317,16 @@ export class MemoryStore {
     if (!raw || typeof raw !== 'string') return null;
     const hash = createHash('sha256').update(raw).digest('hex');
     if (this.apikeys.has(hash)) return null;
-    const id = `key_${randomUUID().slice(0, 8)}`;
+        const id = `key_${randomUUID().slice(0, 8)}`;
     this.apikeys.set(hash, {
       id,
+      hash,
       label,
       createdAt: new Date().toISOString(),
       parentId: null,     // 根
       isBootstrap: true,  // ← 保护标记
     });
+    this.persist();
     return { id };
   }
 
@@ -367,6 +465,9 @@ export class MonitorService {
       //   于是**一次网络抖动就让监控点永久静默失效**（实测复现）。
       //   健康状况由 errorCount / lastError / lastCheckOk 表达。
       monitor.lastCheckOk = false;
+      // 失败状态也要落盘 —— errorCount 是熔断判据，
+      // 丢了它意味着重启后失败计数归零，本该熔断的监控点会继续无限重试。
+      this.store.persist();
       return { error: err.message, code: err.code ?? null };
     }
 
