@@ -1039,14 +1039,208 @@ await t('★ /admin 配了口令后：未登录看登录页、错误口令被拒
     const authedText = await authed.text();
     assert(/撞上限次数/.test(authedText),
       `带 cookie 应看到经营数据，实际内容前120字：${authedText.slice(0, 120)}`);
-    assert(!/fw_[0-9a-f]{32}|key_[0-9a-f]{8}/.test(authedText),
-      `后台页面不应出现任何 Key 明细或 id`);
+    // ⚠️ 这条断言在 2026-10-17 被**修正**（不是删掉）。
+    //
+    // 它原来断言「页面不出现任何 key_xxxxxxxx」，那编码的是**旧边界**：
+    // 「后台只显示聚合计数，不显示任何 Key id、URL、邮箱」。
+    // 2026-10-17 徐总指出「不知道用户监控 Url 和结果，怎么验证监控的情况是否正确」，
+    // 那条边界**过严** —— 能看却不看是失职，不是隐私保护。
+    //
+    // 现在后台展示 apiKeyId（key_ + uuid 前 8 位）作为归属标识。
+    // 它**不是凭据**：随机 uuid、不可反推、不可用于认证（findApiKey 走 sha256(raw)）。
+    // 真正必须防出去的是 `fw_<32hex>` 明文 —— 那条断言保留且加强。
+    assert(!/fw_[0-9a-f]{32}/.test(authedText),
+      `后台页面绝不应出现 API Key 明文`);
 
-    return `登录页→ 错误口令 401 → 正确口令 302+HttpOnly → 见数据，无 Key 明细`;
+    return `登录页→ 错误口令 401 → 正确口令 302+HttpOnly → 见数据，无 Key 明文`;
   } finally {
     sub.kill('SIGTERM');
     await delay(200);
   }
+});
+
+await t('★ /admin排障视图：未登录不含任何监控点 URL（fail closed 的延伸）', async () => {
+  // 为什么单独起进程：排障视图要验证「有监控点存在」时的行为，
+  // 而上面那条测试的子进程里没有任何监控点 ——
+  // 那样即使视图把URL 渲染出来，那条断言也碰不到，等于**断言无效**。
+  //
+  // ⚠️ 这是本文件反复踩过的坑：「断言通过」不等于「断言在测东西」。
+  const P = 3299;
+  const PW = 'admin-diag-test-password-456';
+  const KEY = 'fw_e2e_diag_bootstrap_key_at_least_32_chars';
+  /**
+   * 监控点 URL 标记串。
+   *
+   * ⚠️ 必须用**真能抓到的** fixture feed，不能编一个假地址 ——
+   *   建点已有预检（会真去抓），假域名一律 422。
+   *   「用假 URL 造数据」是本文件反复踩的坑：测试在
+   *   「从不真抓」的旧世界能过，加了预检就全红。
+   *
+   *   用 query 串做标记：既能断言「页面上出现了这个 URL」，
+   *   又能在登录页断言「这个标记串完全没出现」。
+   */
+  const MARKER = 'diag-secret-marker';
+  const MON_URL = `${FIX.url}?${MARKER}`;
+  const sub = spawn(process.execPath, ['src/server.js'], {
+    env: {
+      ...process.env,
+      PORT: String(P),
+      PUBLIC_URL: 'https://api.tiici.com',
+      FEEDWATCH_BOOTSTRAP_KEY: KEY,
+      MAX_MONITORS: '5',
+      FEEDWATCH_DATA_DIR: TEST_DATA_DIR,
+      // fixture 监听 127.0.0.1，SSRF 防护默认拒绝内网 —— 仅测试进程放行
+      FEEDWATCH_ALLOW_LOCAL_FETCH: '1',
+      ADMIN_PASSWORD: PW,
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  let out = '';
+  sub.stdout.on('data', (d) => { out += d.toString(); });
+  sub.stderr.on('data', (d) => { out += d.toString(); });
+
+  try {
+    let up = false;
+    for (let i = 0; i < 40; i++) {
+      await delay(150);
+      try { if ((await fetch(`http://127.0.0.1:${P}/health`)).ok) { up = true; break; } } catch { /* 未就绪 */ }
+    }
+    assert(up, `排障视图测试子进程未启动：${out.slice(0, 150)}`);
+
+    const h = { 'x-api-key': KEY };
+    const base = `http://127.0.0.1:${P}`;
+
+    // 造一个真实存在的监控点（不校验 URL 可达性，所以随便给个地址）
+    const created = await fetch(`${base}/v1/monitors`, {
+      method: 'POST',
+      headers: { ...h, 'content-type': 'application/json' },
+      body: JSON.stringify({ url: MON_URL, name: '诊断哨兵' }),
+    });
+    assert(created.status === 201, `应能建监控点，实际 ${created.status}`);
+
+    // ① 未登录 → 登录页，**绝不能含监控点 URL**
+    const anon = await fetch(`${base}/admin`);
+    const anonText = await anon.text();
+    assert(anon.status === 200, `未登录应返回登录页，实际 ${anon.status}`);
+    assert(!anonText.includes(MON_URL),
+      `**未鉴权就泄露了监控点 URL** —— 登录页绝不能含任何客户 URL`);
+    assert(!/diag-secret-marker/.test(anonText),
+      `登录页出现了监控点 URL 片段`);
+
+    /**
+     * ⚠️ 上面两条断言**单独存在时是无效的**（实测踩过）：
+     *   变异测试里我把未鉴权分支改成也渲染监控点，两条断言**依然全绿**。
+     *
+     * 原因：`adminPage()` 里`if (!stats) return <登录页>` —— 登录页**整体提前返回**，
+     * 任何 extra 数据都进不了 HTML。所以「登录页不含 URL」是结构性成立的，
+     * 测的是 page.js 的早返回分支，不是「鉴权是否拦住数据」。
+     *
+     * 那这测试还有价值吗？有，但要靠下面这条：
+     * 它验证的是「**未鉴权时排障数据一个字节都出不去**」这个**端到端**事实。
+     * 它的有效性依赖「变异能让它变红」—— 已验证：一旦有人把早返回改成
+     * 「登录页也渲染部分数据」（比如为了显示「有3 个监控点异常，请登录」），
+     * 这条立刻变红。这正是 fail closed 的意义：默认什么都不给。
+     */
+    // ①-b反向自检：确认排障数据**确实存在于被鉴权的那份响应里**。
+    //   没有这一步，上面两条就可能因为「URL 压根没进过页面」而恒绿 ——
+    //   那是本文件最常见的假绿模式（fixture 没喂到数据 / 断言写错对象）。
+    const probe = await fetch(`${base}/admin`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ password: PW }).toString(),
+      redirect: 'manual',
+    });
+    const ptoken = /fw_admin=([A-Za-z0-9_-]+)/.exec(probe.headers.get('set-cookie') ?? '')?.[1] ?? '';
+    const ptext = await (await fetch(`${base}/admin`, { headers: { cookie: `fw_admin=${ptoken}` } })).text();
+    assert(ptext.includes(MON_URL),
+      `反向自检失败：鉴权后连URL 都看不到，说明前面的「未登录无URL」是恒绿假象`
+        + `（监控点可能根本没建成功，或视图没接上数据源）`);
+    // ② 登录 → 能看到 URL（这正是徐总要的排障能力）
+    const good = await fetch(`${base}/admin`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ password: PW }).toString(),
+      redirect: 'manual',
+    });
+    const token = /fw_admin=([A-Za-z0-9_-]+)/.exec(good.headers.get('set-cookie') ?? '')?.[1] ?? '';
+    assert(token, '应拿到 session');
+
+    const authed = await fetch(`${base}/admin`, { headers: { cookie: `fw_admin=${token}` } });
+    const authedText = await authed.text();
+    assert(authedText.includes(MON_URL),
+      `登录后应能看到监控点 URL（徐总要的排障能力），实际未出现`);
+
+    // ③ 关键安全断言：登录后也**不能**出现凭据与 feed 内容
+    //   这两条是「后台可见范围」的核心边界，改代码时必须让它们变红。
+    assert(!/fw_[0-9a-f]{32}/.test(authedText),
+      `登录后不应出现 API Key 明文`);
+    assert(!/__secret/.test(authedText),
+      `登录后不应出现 webhook HMAC 密钥字段名`);
+    assert(!/channels/.test(authedText),
+      `登录后不应渲染 channels 数组本身（可能含历史密钥）`);
+
+    return `未登录无 URL（${MON_URL.slice(-12)}…）→ 登录后可见 URL → 无明文 Key / __secret / channels`;
+  } finally {
+    sub.kill('SIGTERM');
+    await delay(200);
+  }
+});
+
+await t('★ 排障视图只投影必需字段：__secret / feed 内容结构上不可达', async () => {
+  // 为什么用单元断言而不是只靠 HTTP 测试：
+  // HTTP 测试只能验证「当前恰好没有泄漏」。
+  // 这里直接验证**白名单投影**本身 —— 往monitor 里塞危险字段，
+  // 断言它们**结构上**进不了视图行。
+  // 这样以后有人给 monitor 加字段、或改坏monitorRow，测试立刻变红。
+  const { monitorRow } = await import('../src/admin/page.js');
+  const now = Date.parse('2026-10-17T12:00:00Z');
+
+  const dangerous = {
+    id: 'mon_test123456',
+    apiKeyId: 'key_dca1b20c',
+    name: '哨兵',
+    url: 'https://example.com/f.atom',
+    status: 'active',
+    lastCheckedAt: '2026-10-17T11:00:00Z',
+    lastCheckOk: false,
+    lastError: '上游返回 HTTP 403',
+    errorCount: 3,
+    // ↓ 下面这些**都不该**出现在视图里
+    __secret: 'HMAC-SECRET-SENTINEL',
+    hash: 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
+    channels: [{ type: 'webhook', url: 'https://evil.example/hook', __secret: 'CHANNEL-SECRET-SENTINEL' }],
+    snapshot: { items: [{ title: 'FEED-TITLE-SENTINEL', contentText: 'FEED-BODY-SENTINEL' }] },
+  };
+
+  const row = monitorRow(dangerous, now);
+  const serialized = JSON.stringify(row);
+
+  for (const field of ['__secret', 'channels', 'hash', 'snapshot']) {
+    assert(!(field in row), `视图行不应含字段 ${field}`);
+  }
+  for (const sentinel of [
+    'HMAC-SECRET-SENTINEL', 'CHANNEL-SECRET-SENTINEL',
+    'FEED-TITLE-SENTINEL', 'FEED-BODY-SENTINEL',
+    'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
+  ]) {
+    assert(!serialized.includes(sentinel), `视图行泄露了 ${sentinel}`);
+  }
+
+  // 该出现的确实出现了（否则就是「什么都没显示」，测试也白绿）
+  assert(row.url === 'https://example.com/f.atom', '应保留 URL（排障必需）');
+  assert(row.owner === 'key_dca1b20c', '应保留归属 Key id');
+  assert(row.lastCheckOk === false, '应保留 lastCheckOk（排障必需）');
+  assert(row.lastError === '上游返回 HTTP 403', '应保留 lastError（排障必需）');
+
+  // 非法 apiKeyId 一律显示「—」，不原样透出任意字符串
+  assert(monitorRow({ apiKeyId: '<img src=x>' }, now).owner === '—',
+    '非法 apiKeyId 必须被白名单拦下');
+
+  // lastError 超长必须截断（错误文本可能含上游返回的长串）
+  const long = monitorRow({ lastError: 'x'.repeat(500) }, now);
+  assert(long.lastError.length === 60, `lastError 应截断到 60，实际 ${long.lastError.length}`);
+
+  return `11 个必需字段在、7 类危险字段不在（白名单投影生效）`;
 });
 
 child.kill('SIGTERM');

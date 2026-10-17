@@ -16,9 +16,43 @@
  *   - 口令比较用 timingSafeEqual，避免时序侧信道
  *   - session 有效期 8 小时，服务重启即失效
  *
- * ── 安全边界（与 telemetry 同一套原则） ──
- * 后台**只显示聚合计数**，不显示任何 Key id、URL、邮箱。
- * 详见 src/telemetry.js 的硬边界说明。
+ * ── 安全边界：能看什么，不能看什么 ──
+ *
+ * ⚠️ **这条边界在 2026-10-17 被修正过一次，方向是「放宽」**（徐总反馈）：
+ *   原文写的是「后台只显示聚合计数，不显示任何 Key id、URL、邮箱」。
+ *   那条边界**过严了** —— 客户投诉「监控没工作」时，看不到 URL 和
+ *   lastError 就无法判断是上游挂了、我们挂了、还是客户配错了。
+ *   **能看却不看，不是隐私保护，是失职。**
+ *
+ * 修正后的边界按「谁能看」分层（不是按「是不是客户数据」分层）：
+ *
+ *   第1 层 产品必需 → 后台可见
+ *     监控点 id/url/name/status/apiKeyId/lastCheckedAt/lastCheckOk/
+ *     lastError/errorCount/lastFormat/trippedByCircuitBreaker
+ *     理由：判断「客户的东西现在是不是真的在跑」的唯一依据。
+ *
+ *   第 2 层 凭据 → **后台也永远不该看到**
+ *     API Key 明文/哈希、webhook HMAC 密钥（channels[].__secret）。
+ *     理由：泄露即可冒用，是完整性问题而非隐私问题。
+ *
+ *   第 3 层 第三方内容 → 后台**永不展示**
+ *     feed 条目标题/正文/作者/分类。
+ *     理由不是隐私洁癖，而是**运营根本不需要**：「这个监控点抓到 3 条变更」
+ *     是运营信息；「那 3 条变更的正文是什么」是客户自己的数据，
+ *     客户在 /v1/monitors/:id/check 自己能看到。
+ *     排障只需要 lastCheckOk / lastError / lastCheckedAt 三件套 ——
+ *     足以区分「没抓到」「抓了但解析失败」「根本没跑」。
+ *
+ * ── 只读：为什么后台不给写操作 ──
+ *   任何变更都必须走 /v1/*+ 客户 Key 的正常鉴权路径，
+ *   这样改动留下「以客户身份操作」的痕迹。
+ *   管理员直改数据库 = 无审计痕迹 —— 那正是 SSH 翻JSON 的问题所在，
+ *   换个界面做同一件事并不能让它变好。
+ *
+ * ── 渲染不依赖 store ──
+ *   `adminPage()` 只接收**已经取好的数据**（见 server.js 的 extra.monitors）。
+ *   page.js 不import store、不读文件 —— 纯渲染，可单测。
+ *   ⚠️ 好处不只是可测：视图**结构上不可能**读到不该读的东西。
  */
 
 import { timingSafeEqual, randomBytes } from 'node:crypto';
@@ -80,6 +114,148 @@ function cookieHeader(token) {
 }
 
 const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+/**
+ * 属性值转义 —— **不能**直接用 esc()。
+ *
+ * ⚠️ esc() 只处理 & < >，**不处理引号**。它对文本节点是安全的，
+ *   但用在 `title="..."` 这类属性里时，一个含 `"` 的值会**提前闭合属性**，
+ *   后面内容变成新的属性 —— 也就是属性注入（XSS）。
+ *
+ *   实测踩到过：`url = https://x.com/"onmouseover=alert(1)`
+ *   → 渲染成 `title="https://x.com/"onmouseover=alert(1)"`，
+ *   `onmouseover` 成了独立事件属性。
+ *
+ *   即使当前 CSP 的 `script-src 'none'` 会挡住内联事件，
+ *   也不能依赖 CSP 兜底 —— CSP 是响应头，会被改；这里是结构性缺陷。
+ */
+const escAttr = (s) => esc(s).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+
+/**
+ * 把监控点投影成**排障视图的一行**（只读、纯函数）。
+ *
+ * ── 为什么是「投影」而不是「传整个对象过来渲染」 ──
+ * 传对象再取字段，漏写一个字段就等于多暴露一个字段。
+ * 投影是**白名单**：只有显式列出的字段才可能出现在 HTML 里，
+ * 新增字段（如 channels[].__secret）**结构上**不会自动泄漏。
+ *
+ * ── 只读：本函数是纯计算，不写任何状态 ──
+ * 后台的所有变更都必须走 /v1/*+ 客户 Key 鉴权路径，
+ * 这样改动留下「以客户身份操作」的痕迹（管理员直改数据库 = 无审计）。
+ *
+ * ── 为什么展示完整的 apiKeyId ──
+ * 运营要回答「这个监控点是谁的」，必须有归属标识。
+ * apiKeyId 是 `key_` + uuid 前 8 位（service.js:317）——
+ * **随机标识符，不是凭据**：不可反推、不可用于认证（findApiKey 走 sha256(raw)）。
+ * 需要保护的 `fw_<32hex>` 明文与 64 位哈希**任何时候都不进本视图**。
+ *
+ * ⚠️ **绝不在此展示**：API Key 哈希、channels[].__secret、
+ *   以及任何 feed 条目内容（title/contentText/author/...）。
+ *   前两个是凭据；第三个是客户自己的数据，运营排障用不到。
+ *
+ * @param {object} m   monitor 记录
+ * @param {number} now 当前时间戳（传入以便测试确定性）
+ * @returns {object} 视图行
+ */
+export function monitorRow(m, now = Date.now()) {
+  const apiKeyId = String(m?.apiKeyId ?? '');
+  return {
+    id: String(m?.id ?? ''),
+    /**
+     * 归属标识 = apiKeyId（如 `key_dca1b20c`），**完整展示**。
+     *
+     *为什么可以完整展示：apiKeyId 是 `key_` + uuid 前 8 位（service.js:317），
+     *   它是**随机标识符**，不是凭据 ——
+     *   · 不可反推（uuid 随机，与邮箱/域名无任何映射关系）
+     *   · 不可用于认证（findApiKey 走的是 sha256(raw)，不是 id）
+     *   · 运营必须能按它定位「这个监控点是谁的」
+     *
+     * ⚠️ 真正的凭据是 `fw_<32hex>` 明文与 64 位 sha256 哈希 ——
+     *   那两个**任何时候都不进这个视图**（也不该进）。
+     *
+     * 用白名单正则校验后才展示：非法值一律显示「—」，
+     * 避免把任意字符串（含 HTML）当 id 渲染出去。
+     */
+    owner: /^key_[a-f0-9]{8}$/.test(apiKeyId) ? apiKeyId : '—',
+    name: String(m?.name ?? ''),
+    url: String(m?.url ?? ''),
+    status: String(m?.status ?? 'unknown'),
+    tripped: m?.trippedByCircuitBreaker === true,
+    lastCheckedAt: m?.lastCheckedAt ?? null,
+    lastCheckOk: m?.lastCheckOk ?? null,
+    /** 截断到 60 字符 —— 错误文本可能含上游返回的长串 */
+    lastError: m?.lastError ? String(m.lastError).slice(0, 60) : null,
+    errorCount: Number(m?.errorCount ?? 0),
+    _now: now,
+  };
+}
+
+/** 相对时间：足以判断「多久没跑」，不需要绝对时间戳 */
+function relTime(iso, now) {
+  if (!iso) return '从未';
+  const t = Date.parse(iso);
+  if (!Number.isFinite(t)) return '未知';
+  const s = Math.max(0, Math.floor((now - t) / 1000));
+  if (s < 60) return `${s} 秒前`;
+  if (s < 3600) return `${Math.floor(s / 60)} 分钟前`;
+  if (s < 86400) return `${Math.floor(s / 3600)} 小时前`;
+  return `${Math.floor(s / 86400)} 天前`;
+}
+
+/**
+ * 排障表：每行一个监控点。
+ *
+ * 排序：**出错的排最前**（lastCheckOk === false），其次按 lastCheckedAt 倒序。
+ * 理由：排障时先看坏掉的 —— 正常的一眼扫过就行，异常的一眼看不到就漏了。
+ * 从未检查过的（lastCheckOk === null）也算异常一类，同样排前面：
+ * 「建了但从没跑起来」是最需要被发现的故障。
+ */
+function diagnosticsTable(rows) {
+  if (!rows || rows.length === 0) {
+    return '<p class="empty">暂无监控点</p>';
+  }
+  const now = rows[0]._now ?? Date.now();
+  const bad = (r) => r.lastCheckOk !== true;
+
+  const sorted = [...rows].sort((a, b) => {
+    if (bad(a) !== bad(b)) return bad(a) ? -1 : 1;
+    return String(b.lastCheckedAt ?? '').localeCompare(String(a.lastCheckedAt ?? ''));
+  });
+
+  const body = sorted.map((r) => {
+    // 三态：失败 / 成功 / 从未检查过 —— 排障要能区分「没跑」与「跑失败」
+    const okBadge = r.lastCheckOk === true
+      ? '<span class="pill ok">正常</span>'
+      : r.lastCheckOk === false
+        ? '<span class="pill bad">失败</span>'
+        : '<span class="pill warn">未检查</span>';
+
+    const statusText = r.status === 'active' ? '运行中' : (r.status === 'paused' ? '已暂停' : esc(r.status));
+    const statusPill = r.tripped
+      ? '<span class="pill bad">熔断</span>'
+      : r.status === 'active'
+        ? '<span class="pill ok">运行中</span>'
+        : `<span class="pill warn">${statusText}</span>`;
+
+    return `<tr${bad(r) ? ' class="bad-row"' : ''}>
+      <td class="c mono">${esc(r.owner)}</td>
+      <td class="c">${esc(r.name)}</td>
+      <td class="c mono url" title="${escAttr(r.url)}">${esc(r.url)}</td>
+      <td class="c">${statusPill}</td>
+      <td class="c">${esc(relTime(r.lastCheckedAt, now))} ${okBadge}</td>
+      <td class="c err">${r.lastError ? esc(r.lastError) : ''}</td>
+    </tr>`;
+  }).join('\n      ');
+
+  return `<table class="dt diag">
+    <thead><tr>
+      <th>归属 Key</th><th>名称</th><th>监控 URL</th><th>状态</th><th>上次检查</th><th>错误</th>
+    </tr></thead>
+    <tbody>
+      ${body}
+    </tbody>
+  </table>`;
+}
 
 /** 把 0/1/2 之类的计数渲染成一行条 —— 让人一眼看出比例 */
 /**
@@ -212,6 +388,31 @@ table.dt td.mono{font-family:var(--mono);font-size:11.5px}
 table.dt td.barcell{width:auto;padding:9px 10px}
 table.dt td.barcell .bar{display:block;height:7px;background:var(--accent);
   border-radius:4px;min-width:3px;opacity:.7}
+
+/* ── 监控点排障表 ──
+   六列固定宽度：URL 与错误列给足空间并允许省略，
+   否则 table-layout:fixed 会把 URL 压成十几个字符 —— 而 URL 正是排障时最想看清的一列。 */
+table.diag{table-layout:fixed;margin-top:2px}
+table.diag th{padding:6px 4px}
+table.diag td{padding:8px 4px;vertical-align:middle}
+table.diag td.c{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+table.diag td.mono{font-family:var(--mono);font-size:11px}
+table.diag th:nth-child(1),table.diag td:nth-child(1){width:74px}
+table.diag th:nth-child(2),table.diag td:nth-child(2){width:96px}
+table.diag th:nth-child(3),table.diag td:nth-child(3){width:auto}
+table.diag th:nth-child(4),table.diag td:nth-child(4){width:66px}
+table.diag th:nth-child(5),table.diag td:nth-child(5){width:126px}
+table.diag th:nth-child(6),table.diag td:nth-child(6){width:170px}
+table.diag td.url{font-size:11px;color:var(--text-2)}
+table.diag td.err{font-size:11px;color:var(--accent);
+  font-family:var(--mono);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+table.diag td.c .pill{margin-left:4px}
+table.diag tr.bad-row td{background:var(--surface-2)}
+@media (max-width:720px){
+  /* 窄屏下横向滚动，而不是把六列压成一团读不出 */
+  .diag-scroll{overflow-x:auto;-webkit-overflow-scrolling:touch}
+  table.diag{min-width:660px}
+}
 .cols{display:grid;gap:20px;grid-template-columns:repeat(auto-fit,minmax(290px,1fr))}
 .split{display:grid;gap:20px;grid-template-columns:minmax(0,1.35fr) minmax(0,1fr);
   align-items:start}
@@ -250,7 +451,9 @@ a{color:var(--accent)}
     <button type="submit">进入</button>
   </form>
   <p class="note">会话有效期 8 小时；服务重启即失效。<br>
-     页面只显示<b>聚合计数</b>，不显示任何 Key、URL 或邮箱。</p>
+     进入后可见<b>监控点排障信息</b>（URL / 状态 / 上次检查 / 错误）——
+     这是客户投诉时判断「是不是真的在跑」的唯一依据。<br>
+     页面<b>只读</b>，且不显示 API Key、签名密钥或 feed 正文。</p>
 </div>`;
 
   if (!stats) {
@@ -270,6 +473,14 @@ ${login}
   const verdictYes = (cs.users_hit_limit ?? 0) >= 1;
   const pay = extra.payLinks ?? {};
   const live = extra.liveMonitors;
+  /**
+   * 排障视图数据。
+   *
+   * ⚠️ server.js 传进来的必须是**已经过 monitorRow() 投影**的行，
+   *   不是原始 monitor 对象 —— 投影是白名单，page.js 不做二次过滤。
+   *   原因：过滤逻辑只有一处，就不会出现「两处过滤、其中一处漏字段」。
+   */
+  const monRows = Array.isArray(extra.monitors) ? extra.monitors : [];
 
   return `<!DOCTYPE html>
 <html lang="zh-CN"><head><meta charset="UTF-8">
@@ -331,6 +542,31 @@ ${login}
 </div>
 
 <div class="card">
+  <h2>监控点排障</h2>
+  <p class="hint">客户投诉「监控没工作」时，先看这里 —— 出错的排在最前。
+     只需要 <code>lastCheckOk</code> / <code>lastError</code> / <code>上次检查</code>
+     就能区分「上游挂了」「我们解析失败」「根本没跑」。</p>
+  <div class="cols" style="margin-bottom:14px">
+    ${dataTable([
+      { label: '监控点总数', value: monRows.length },
+      { label: '异常', value: monRows.filter((r) => r.lastCheckOk !== true).length,
+        tone: monRows.some((r) => r.lastCheckOk !== true) ? 'hot' : '',
+        hint: '失败或从未检查' },
+      { label: '已暂停 / 熔断', value: monRows.filter((r) => r.status !== 'active' || r.tripped).length,
+        hint: '不再自动检查' },
+      { label: '本次运行', value: `${live?.uptimeDays ?? 0} 天`, hint: '进程启动至今' },
+    ], { caption: '汇总' })}
+  </div>
+  <div class="diag-scroll">
+    ${diagnosticsTable(monRows)}
+  </div>
+  <p class="note">⚠️ 本页<b>只读</b>：任何变更都必须走客户自己的 API（带 Key 鉴权），
+     这样改动留下「以客户身份操作」的痕迹 —— 管理员直接改库等于没有审计。<br>
+     刻意<b>不展示</b>：API Key 哈希、webhook 签名密钥、feed 条目内容
+     （标题/正文/作者）—— 前两者是凭据，第三者客户自己能在 API 里看到。</p>
+</div>
+
+<div class="card">
   <h2>收款链接库存</h2>
   <p class="hint">Payoneer 收款链接<b>单次使用</b>，用完必须换。备用耗尽时客户会看到「已付款」。</p>
   ${dataTable([
@@ -368,11 +604,14 @@ ${login}
     { label: '统计来源', value: '<code>/opt/feedwatch/data/events-*.jsonl</code>' },
     { label: '客户数据存储', value: '<code>/opt/feedwatch/data/store.json</code>', hint: '监控点·快照·Key 哈希，重启不丢' },
     { label: '记录天数', value: `${stats.days ?? 0} 天`, hint: `${stats.first_day ?? '—'} 至 ${stats.last_day ?? '—'}` },
-    { label: '含客户数据？', value: '<span class="pill ok">否</span>', hint: '无 URL / feed 正文 / 邮箱 / API Key' },
+    { label: '统计日志含客户数据？', value: '<span class="pill ok">否</span>', hint: '无 URL / feed 正文 / 邮箱 / API Key' },
+    { label: '后台可见范围', value: '<span class="pill warn">监控点排障字段</span>',
+      hint: 'URL/状态/错误可见；凭据与 feed 内容永不可见' },
     { label: '统计端点', value: '<code>GET /v1/stats</code>', hint: '需 API Key，返回同一份数据' },
   ])}
-  <p class="note">这与<a href="/privacy">隐私政策</a>的承诺一致，并有自动化测试担保 ——
-     往日志里塞任何客户数据会让 e2e 测试变红。</p>
+  <p class="note">统计日志与<a href="/privacy">隐私政策</a>的承诺一致，并有自动化测试担保 ——
+     往日志里塞任何客户数据会让 e2e 测试变红。
+     排障视图<b>不读统计日志</b>，它读的是客户数据存储，但只投影排障必需字段。</p>
 </div>
 
 </div></body></html>`;

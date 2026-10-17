@@ -12,7 +12,7 @@ import { mcpInfoPage } from './mcp/info-page.js';
 import { getKeyPage, EMAIL_RE } from './mcp/get-key-page.js';
 import { track, summarize } from './telemetry.js';
 import { PersistentStore } from './persistence.js';
-import { adminPage, adminEnabled, sessionValid, safeEqualAdmin, newAdminSession, cookieHeader } from './admin/page.js';
+import { adminPage, adminEnabled, sessionValid, safeEqualAdmin, newAdminSession, cookieHeader, monitorRow } from './admin/page.js';
 import { isPrivateAddress } from './security/ssrf.js';
 
 const HOST = process.env.HOST ?? '127.0.0.1';
@@ -492,6 +492,21 @@ const server = http.createServer(async (req, res) => {
               monitors: store.listMonitors().length,
               uptimeDays: Math.floor(process.uptime() / 86400),
             },
+            /**
+             * 监控点排障明细（2026-10-17，徐总「不知道用户监控 Url 和结果，
+             * 怎么验证监控的情况是否正确」）。
+             *
+             * ⚠️ 必须经`monitorRow()` 投影后再传给 page.js —— 它是**白名单**：
+             *   只有显式列出的字段才可能进HTML。
+             *   直接传 `store.listMonitors()` 的原始对象就等于把
+             *   channels（可能含历史 __secret）等字段一起交出去，
+             *   靠 page.js 「记得别渲染」来防 —— 那正是这次要改掉的模式。
+             *
+             * 数据来源是**内存 Map**（`listMonitors()` 读 `this.monitors`），
+             * 不读 store.json —— 所以文件权限 600 与本页无关，
+             * 同进程同uid 天然可读。
+             */
+            monitors: store.listMonitors().map((m) => monitorRow(m)),
           },
         }));
       }
