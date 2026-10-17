@@ -218,6 +218,45 @@ console.log('\n\x1b[1m模式 ② 只声明不强制\x1b[0m \x1b[90m（声明 A�
     unitProblems.length
       ? unitProblems.join('；')
       : '两版页面 + 手册描述文案一致');
+
+  // ②-h  **不得承诺我们控制不了的价格行为**
+  //
+  // 实测教训（2026-10-17，徐总纠正）：我看到一次付款页显示
+  // 「Recipient gets 28.13」就断定「我们承担手续费、客户实付 $29」，
+  // 并据此写下「$29 covers all payment fees」。
+  //
+  // **事实：手续费承担方是付款方在付款页自己选的，建链接时无法预设。**
+  // 所以客户可能付 $29.00，也可能付 $29.87 —— 落地页不能承诺「全包」。
+  //
+  // 这是**「只声明不强制」的第六种形态**：
+  //   声称一个我们**无法控制**的行为，等于对外做出做不到的承诺。
+  //
+  // 检查：页面不得出现「价格已含全部费用」这类绝对断言；
+  // 且必须明确告知「付款页可选择由谁承担手续费」。
+  const feeProblems = [];
+  for (const f of ['web/zh.html', 'web/en.html']) {
+    let page = '';
+    try { page = readFileSync(join(ROOT, f), 'utf8'); } catch { continue; }
+    // 绝对断言 = 不可接受的错误承诺
+    if (/covers all payment fees|已含全部支付手续费/.test(page))
+      feeProblems.push(`${f} 仍承诺「$29 含全部手续费」—— 但承担方由付款方在付款页选，我们控制不了`);
+    // 必须说明可选两种金额，否则客户在付款页看到 $29.87 会觉得被加价
+    if (!/29\.87/.test(page))
+      feeProblems.push(`${f} 未告知客户可能需要付 $29.87（付款方自选承担方）`);
+  }
+  // 退款政策必须按「客户实际支付额」退款，不能只退 29
+  try {
+    const re = readFileSync(join(ROOT, 'web/refund.en.html'), 'utf8');
+    const rz = readFileSync(join(ROOT, 'web/refund.zh.html'), 'utf8');
+    if (!/29\.87/.test(re) || !/29\.87/.test(rz))
+      feeProblems.push('退款政策未按客户实付金额（含 $29.87 情形）退款');
+  } catch { /* 跳过 */ }
+
+  check('只声明', '不承诺控制不了的价格行为（手续费由付款方选）',
+    feeProblems.length === 0,
+    feeProblems.length
+      ? feeProblems.join('；')
+      : '两版页面 + 退款政策均已如实说明两种金额');
 }
 
 // ══════════════════════════════════════════════════════════════
