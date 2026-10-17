@@ -928,6 +928,50 @@ await t('★ /admin 未配 ADMIN_PASSWORD 时必须404（fail closed）', async 
   return `404（fail closed 生效）`;
 });
 
+await t('★ HTML 响应的 CSP 必须允许内联样式（否则后台变纯文本）', async () => {
+  // 背景（2026-10-17）：/admin 曾全局设 CSP `default-src 'none'`，
+  // 它把<style> 内联样式一起禁了 —— 页面**拿到完整 HTML 与 CSS，
+  // 浏览器却拒绝应用任何样式**，渲染成一堆无格式纯文本。
+  // HTML 完整、CSS 规则齐全、HTTP 200 —— 肉眼只看到「太简陋」，
+  // 实际是「完全没样式」。这条测试锁住修复。
+  const PW = 'admin-test-password-123';
+  const sub = spawn(process.execPath, ['src/server.js'], {
+    env: {
+      ...process.env, PORT: '3297', PUBLIC_URL: 'https://api.tiici.com',
+      FEEDWATCH_BOOTSTRAP_KEY: API_KEY, MAX_MONITORS: '5',
+      FREE_INTERVALS: '900,3600,21600', FEEDWATCH_DATA_DIR: TEST_DATA_DIR,
+      ADMIN_PASSWORD: PW,
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  let out = '';
+  sub.stdout.on('data', (d) => { out += d.toString(); });
+  sub.stderr.on('data', (d) => { out += d.toString(); });
+  try {
+    let up = false;
+    for (let i = 0; i < 40; i++) {
+      await delay(150);
+      try { if ((await fetch('http://127.0.0.1:3297/health')).ok) { up = true; break; } } catch { /* 未就绪 */ }
+    }
+    assert(up, `CSP 测试子进程未启动：${out.slice(0, 150)}`);
+
+    const r = await fetch('http://127.0.0.1:3297/admin');
+    const html = await r.text();
+    assert(/<style>/.test(html), `未登录页应含 <style> 标签`);
+
+    const csp = r.headers.get('content-security-policy') ?? '';
+    assert(csp, `应返回 CSP 响应头`);
+    assert(/style-src[^']*'unsafe-inline'/.test(csp),
+      `HTML 响应的 CSP 必须允许内联样式，否则 <style> 被禁、页面变纯文本。实际 CSP：${csp}`);
+    // ⚠️ 放宽的只是样式，脚本仍必须禁止
+    assert(/script-src[^']*'none'/.test(csp),
+      `脚本仍必须是 none —— 只放宽样式，不是整体放开 CSP。实际：${csp}`);
+    return `style-src 允许内联样式，script-src 仍为 none`;
+  } finally {
+    sub.kill('SIGTERM'); await delay(200);
+  }
+});
+
 await t('★ /admin 配了口令后：未登录看登录页、错误口令被拒、正确口令进得去', async () => {
   // 独立进程，因为主进程故意不配 ADMIN_PASSWORD（测 fail closed）。
   const P = 3298;

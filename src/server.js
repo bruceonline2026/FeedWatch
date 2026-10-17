@@ -351,8 +351,38 @@ const server = http.createServer(async (req, res) => {
   res.setHeader('x-frame-options', 'DENY');
   res.setHeader('referrer-policy', 'no-referrer');
   res.setHeader('cache-control', 'no-store');
-  // 本服务只返回 JSON，禁止浏览器对任何响应做 MIME 嗅探
-  res.setHeader('content-security-policy', "default-src 'none'; frame-ancestors 'none'");
+  // 本服务主要返回 JSON，默认禁止浏览器对任何响应做 MIME 嗅探
+  //
+  // ⚠️ **但 HTML 页面需要 style-src 'unsafe-inline'**（2026-10-17 修）：
+  //   `default-src 'none'` 会把 `<style>` 内联样式一起禁掉 ——
+  //   结果是 `/admin` 后台**拿到完整 HTML 与 CSS，浏览器却拒绝应用任何样式**，
+  //   页面渲染成一堆无格式的纯文本（徐总截图发现）。
+  //
+  //   注意这不是「放开 CSP」，而是**按响应类型给最小必要权限**：
+  //   · style-src 只放 unsafe-inline（允许内联样式），仍然**禁止外部脚本**
+  //   · script-src 'none' —— 页面里**永远不会有脚本**，保持禁止
+  //   · img-src 只放 data: —— 允许内联图标，仍然**禁止任何外部资源请求**
+  //   · form-action 'self' —— 登录表单只能 POST 回自己
+  //
+  // ⚠️ **必须按「这个端点会返回 HTML」判断，不能读 res.getHeader('content-type')** ——
+  //   content-type 是在处理器里 writeHead 时才设的，而这里在它之前执行，
+  //   读到的永远是空 → 条件恒为 false → 走了严格分支 → 样式又被禁。
+  //   这就是「代码看起来对、实际没生效」的典型。
+  const HTML_PATHS = new Set(['/admin', '/mcp', '/get-key']);
+  res.setHeader(
+    'content-security-policy',
+    HTML_PATHS.has(path)
+      ? [
+        "default-src 'none'",
+        "style-src 'unsafe-inline'",
+        "img-src data:",
+        "script-src 'none'",
+        "form-action 'self'",
+        "base-uri 'none'",
+        "frame-ancestors 'none'",
+      ].join('; ')
+      : "default-src 'none'; frame-ancestors 'none'",
+  );
 
   // CORS：允许 MCP 客户端跨域调用。
   // 上线前审计修复：原先对所有响应（含鉴权区）返回 `*`，任何网站都能

@@ -82,23 +82,50 @@ function cookieHeader(token) {
 const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
 /** 把 0/1/2 之类的计数渲染成一行条 —— 让人一眼看出比例 */
+/**
+ * 数据表：两列 —— 指标 / 数值。
+ *
+ * ⚠️ 为什么后台以**表格**为主（2026-10-17 徐总反馈「太简洁，必要的表格还是需要的」）：
+ * 卡片适合「一眼看大数字」，但后台要回答的是**一组数字之间的关系**
+ * （撞墙人数 ÷ 领 Key 数 =撞墙率），那必须能上下对照着看。
+ * 所以指标一律用表格，表格左侧固定宽度、右侧右对齐 —— 数字列能竖着比。
+ */
+function dataTable(rows, { caption = '', className = '' } = {}) {
+  const body = rows
+    .filter(Boolean)
+    .map(({ label, value, hint, tone }) => `<tr class="${tone ?? ''}">
+      <td class="k">${esc(label)}${hint ? `<div class="h">${esc(hint)}</div>` : ''}</td>
+      <td class="v">${value}</td>
+    </tr>`)
+    .join('\n      ');
+  return `<table class="dt ${className}">
+    ${caption ? `<caption>${esc(caption)}</caption>` : ''}
+    <tbody>
+      ${body}
+    </tbody>
+  </table>`;
+}
+
 function bar(n, max) {
   const pct = max > 0 ? Math.max(2, Math.round((n / max) * 100)) : 0;
   return `<span class="bar" style="width:${pct}%"></span>`;
 }
 
+/** 分布也改成表格 —— 能看出绝对值而不只是比例 */
 function distribution(title, obj) {
   const entries = Object.entries(obj ?? {}).sort((a, b) => b[1] - a[1]);
   if (entries.length === 0) return `<p class="empty">暂无数据</p>`;
   const max = Math.max(...entries.map((e) => e[1]));
-  return `<div class="dist">
-    <h3>${esc(title)}</h3>
-    ${entries.map(([k, v]) => `<div class="row">
-      <span class="k">${esc(k)}</span>
-      ${bar(v, max)}
-      <span class="n">${v}</span>
-    </div>`).join('\n    ')}
-  </div>`;
+  return `<table class="dt dist">
+    <thead><tr><th>${esc(title)}</th><th>占比</th><th class="num">次数</th></tr></thead>
+    <tbody>
+      ${entries.map(([k, v]) => `<tr>
+        <td class="k mono">${esc(k)}</td>
+        <td class="barcell">${bar(v, max)}</td>
+        <td class="v num">${v}</td>
+      </tr>`).join('\n      ')}
+    </tbody>
+  </table>`;
 }
 
 function metric(label, value, hint = '') {
@@ -159,6 +186,40 @@ th,td{text-align:left;padding:8px 6px;border-bottom:0.5px solid var(--border);
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 th{font-size:11.5px;font-weight:500;color:var(--text-3)}
 td.n{text-align:right;font-variant-numeric:tabular-nums;width:70px}
+
+/* ── 数据表（2026-10-17 徐总反馈「后台太简洁，必要的表格还是需要的」）──
+   卡片适合「一眼看大数字」，但后台要回答的是**一组数字之间的关系**
+   （撞墙人数 ÷ 领 Key 数 = 撞墙率），必须能上下对照着看。
+   所以指标一律用表格：左列标签固定宽、右列数值右对齐且等宽数字，
+   这样多个数字竖着排列时能直接比大小。 */
+table.dt{margin:2px 0 0}
+table.dt caption{caption-side:top;text-align:left;font-size:11.5px;
+  color:var(--text-3);padding:0 0 8px}
+table.dt th{padding:6px;border-bottom:0.5px solid var(--border-2);
+  font-size:11px;letter-spacing:.02em}
+table.dt td{padding:9px 6px;vertical-align:top}
+table.dt td.k{width:auto;color:var(--text-2);white-space:normal}
+table.dt td.k .h{font-size:11.5px;color:var(--text-3);margin-top:2px;
+  line-height:1.45;white-space:normal}
+table.dt td.v{width:112px;text-align:right;font-variant-numeric:tabular-nums;
+  font-size:15px;font-weight:500;color:var(--text);white-space:nowrap}
+table.dt td.v.num{font-size:13px;font-weight:400;color:var(--text-2);width:64px}
+table.dt td.v code{font-size:11px;background:var(--surface-2);padding:2px 6px;
+  border-radius:4px;white-space:nowrap}
+table.dt tr.hot td.v{color:var(--accent)}
+table.dt tr:last-child td{border-bottom:0}
+table.dt td.mono{font-family:var(--mono);font-size:11.5px}
+table.dt td.barcell{width:auto;padding:9px 10px}
+table.dt td.barcell .bar{display:block;height:7px;background:var(--accent);
+  border-radius:4px;min-width:3px;opacity:.7}
+.cols{display:grid;gap:20px;grid-template-columns:repeat(auto-fit,minmax(290px,1fr))}
+.split{display:grid;gap:20px;grid-template-columns:minmax(0,1.35fr) minmax(0,1fr);
+  align-items:start}
+@media (max-width:640px){ .split{grid-template-columns:1fr} }
+.side{background:var(--surface-2);border-radius:9px;padding:16px 18px}
+.side-label{font-size:11.5px;color:var(--text-3);margin-bottom:8px}
+.side .verdict{margin:0 0 12px;font-size:14px;line-height:1.5}
+.side-note{font-size:12.5px;color:var(--text-2);line-height:1.6}
 form{margin:0}
 label{display:block;font-size:12.5px;font-weight:500;margin-bottom:6px}
 input{width:100%;max-width:280px;padding:9px 12px;border:0.5px solid var(--border-2);
@@ -225,43 +286,67 @@ ${login}
 
 <div class="card">
   <h2>付费信号</h2>
-  <p class="hint">这是「有多少人想要更多配额」—— 判定「该不该做付费档」的直接依据。</p>
-  <div class="grid">
-    ${metric('累计领 Key', stats.keys_issued, '去重后 ' + stats.unique_users + ' 人')}
-    ${metric('撞上限次数', stats.limit_hits, '同一 Key 多次撞墙只计人数')}
-    ${metric('撞墙人数', cs.users_hit_limit ?? 0, '潜在付费用户')}
-    ${metric('撞墙率', cs.hit_rate === null || cs.hit_rate === undefined
-      ? '—' : Math.round((cs.hit_rate ?? 0) * 100) + '%', '撞墙 ÷ 领 Key')}
+  <p class="hint">「有多少人想要更多配额」—— 判定「该不该做付费档」的直接依据。</p>
+  <div class="split">
+    ${dataTable([
+      { label: '累计领 Key', value: stats.keys_issued, hint: '去重后 ' + stats.unique_users + ' 人' },
+      { label: '撞上限次数', value: stats.limit_hits, hint: '同一 Key 多次撞墙只计一次人数' },
+      { label: '撞墙人数', value: cs.users_hit_limit ?? 0, hint: '潜在付费用户', tone: verdictYes ? 'hot' : '' },
+      {
+        label: '撞墙率',
+        value: (cs.hit_rate === null || cs.hit_rate === undefined)
+          ? '—'
+          : `${Math.round((cs.hit_rate ?? 0) * 100)}%`,
+        hint: '撞墙人数 ÷ 领 Key 人数',
+      },
+    ], { caption: '漏斗：从领 Key 到撞墙' })}
+    <div class="side">
+      <div class="side-label">结论</div>
+      <div class="verdict ${verdictYes ? 'yes' : 'no'}">${esc(cs.verdict ?? '暂无数据')}</div>
+      <div class="side-note">
+        判定线是「8 周 5 个付费用户」。<br>
+        <b>${cs.users_hit_limit ?? 0} 人</b>已卡在 5 个上限上，
+        ${(cs.users_hit_limit ?? 0) >= 3 ? '付费档值得上线。' : '还不到3 人，继续观察。'}
+      </div>
+    </div>
   </div>
-  <div class="verdict ${verdictYes ? 'yes' : 'no'}">${esc(cs.verdict ?? '暂无数据')}</div>
 </div>
 
 <div class="card">
   <h2>使用情况</h2>
   <p class="hint">功能是否真被用起来 —— 建了 0 个监控点说明流程断了。</p>
-  <div class="grid">
-    ${metric('建监控点', stats.monitors_created)}
-    ${metric('建点失败', stats.create_failed)}
-    ${metric('检查失败', stats.check_failed)}
-    ${metric('其他 429', stats.other_429, '限流命中')}
-    ${metric('当前内存中', live?.monitors ?? '—', '重启即清空')}
-    ${metric('运行天数', stats.uptime_days ?? '—')}
+  <div class="cols">
+    ${dataTable([
+      { label: '建监控点', value: stats.monitors_created },
+      { label: '建点失败', value: stats.create_failed, hint: 'URL 无效/不是 feed 等' },
+      { label: '检查失败', value: stats.check_failed, hint: '抓取或解析失败' },
+    ], { caption: '功能调用' })}
+    ${dataTable([
+      { label: '其他 429', value: stats.other_429, hint: '限流命中（非撞墙）' },
+      { label: '当前内存中', value: live?.monitors ?? '—', hint: '重启即清空' },
+      { label: '累计事件', value: stats.events_total ?? '—', hint: '日志文件中的事件总数' },
+    ], { caption: '运行状态' })}
   </div>
 </div>
 
 <div class="card">
   <h2>收款链接库存</h2>
   <p class="hint">Payoneer 收款链接<b>单次使用</b>，用完必须换。备用耗尽时客户会看到「已付款」。</p>
-  <table>
-    <tr><td>当前链接</td><td class="n">
-      <span class="pill ${pay.has_current ? 'ok' : 'bad'}">${pay.has_current ? '可用' : '无'}</span></td></tr>
-    <tr><td>备用链接</td><td class="n">
-      <span class="pill ${pay.standby_count > 1 ? 'ok' : pay.standby_count === 1 ? 'warn' : 'bad'}">
-        ${pay.standby_count ?? 0} 条</span></td></tr>
-    <tr><td>是否需要新建</td><td class="n">
-      <span class="pill ${pay.needs_new_link ? 'warn' : 'ok'}">
-        ${pay.needs_new_link ? '是' : '否'}</span></td></tr>
-  </table>
+  ${dataTable([
+    {
+      label: '当前链接',
+      value: `<span class="pill ${pay.has_current ? 'ok' : 'bad'}">${pay.has_current ? '可用' : '无'}</span>`,
+    },
+    {
+      label: '备用链接',
+      value: `<span class="pill ${pay.standby_count > 1 ? 'ok' : pay.standby_count === 1 ? 'warn' : 'bad'}">${pay.standby_count ?? 0} 条</span>`,
+    },
+    {
+      label: '是否需要新建',
+      value: `<span class="pill ${pay.needs_new_link ? 'warn' : 'ok'}">${pay.needs_new_link ? '是' : '否'}</span>`,
+      hint: pay.needs_new_link ? '当前链接不可用或无备用' : '库存充足',
+    },
+  ])}
   <p class="note">⚠️ <b>每次收到付款后立刻换链接</b>，否则下一个客户看到的是死链。<br>
      换法见 <code>docs/运营手册/更换收款链接操作手册.md</code>。</p>
 </div>
@@ -270,7 +355,7 @@ ${login}
   <h2>失败与限流分布</h2>
   <p class="hint">失败原因分类找产品缺口（如大量 <code>not_feed</code> = URL 支持太窄）；
      429 分类看限流是否误伤正常用户。</p>
-  <div style="display:grid;gap:22px;grid-template-columns:repeat(auto-fit,minmax(280px,1fr))">
+  <div class="cols">
     ${distribution('创建失败原因', stats.fail_reasons)}
     ${distribution('429 触发位置', stats.r429_reasons)}
   </div>
@@ -278,12 +363,14 @@ ${login}
 
 <div class="card">
   <h2>数据边界</h2>
-  <p class="note" style="margin-top:0">
-    本页所有数字均为<b>聚合计数</b>，来自 <code>/opt/feedwatch/data/events-*.jsonl</code>。<br>
-    那些日志里<b>没有</b>监控点 URL、feed 内容、邮箱、API Key —— 客户数据只在内存中。
-    这与<a href="/privacy">隐私政策</a>的承诺一致，并有自动化测试担保。<br><br>
-    统计端点：<code>GET /v1/stats</code>（需 API Key，返回同一份数据）。
-  </p>
+  ${dataTable([
+    { label: '数据来源', value: '<code>/opt/feedwatch/data/events-*.jsonl</code>' },
+    { label: '记录天数', value: `${stats.days ?? 0} 天`, hint: `${stats.first_day ?? '—'} 至 ${stats.last_day ?? '—'}` },
+    { label: '含客户数据？', value: '<span class="pill ok">否</span>', hint: '无 URL / feed 正文 / 邮箱 / API Key' },
+    { label: '统计端点', value: '<code>GET /v1/stats</code>', hint: '需 API Key，返回同一份数据' },
+  ])}
+  <p class="note">这与<a href="/privacy">隐私政策</a>的承诺一致，并有自动化测试担保 ——
+     往日志里塞任何客户数据会让 e2e 测试变红。</p>
 </div>
 
 </div></body></html>`;
