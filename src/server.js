@@ -5,6 +5,7 @@
  */
 
 import http from 'node:http';
+import { readFileSync } from 'node:fs';
 import { MemoryStore, MonitorService, checkOnce, INTERVALS } from './service.js';
 import { handleMcpRequest, serverManifest } from './mcp/endpoint.js';
 import { mcpInfoPage } from './mcp/info-page.js';
@@ -12,7 +13,50 @@ import { isPrivateAddress } from './security/ssrf.js';
 
 const HOST = process.env.HOST ?? '127.0.0.1';
 const PORT = Number(process.env.PORT ?? 3001);
-const PUBLIC_URL = process.env.PUBLIC_URL ?? `https://api.tiici.com`;
+const PUBLIC_URL = process.env.PUBLIC_URL ?? 'https://api.tiici.com';
+
+/**
+ * 付款跳转配置（解决 Payoneer 收款链接「单次使用」的限制）
+ *
+ * ── 为什么需要这个 ──
+ * Payoneer 收款链接**每条只能用一次**（官方原文：single-use, tied to one
+ * buyer and one transaction, once paid it can't be reused）。所以直接把
+ * 链接写进落地页，会出现：
+ *   收第一笔钱 → 链接作废 → 落地页按钮指向死链
+ *   → 任何新客户点「Get Pro access」都看到 "That payment link was already paid"
+ * 而**死链与活链的 HTTP 响应完全相同**（都是 302 到 app.payoneer.com），
+ * 程序无法自动区分，只能靠浏览器渲染后的文案 —— 也就是说**无法自动告警**。
+ *
+ * ── 做法 ──
+ * 落地页按钮指向 `${PUBLIC_URL}/pay`（**永不改变**），由本端点读取
+ * 服务器上的 pay-link.json 里的当前有效链接并 302 跳转。
+ * 链接用完 → 只改服务器上那一个文件 → **落地页、README、推文都不用动**。
+ *
+ * ── 安全 ──
+ * 目标 URL 只允许 payoneer.com 域，且强制 https —— 防止配置文件被改成
+ * 任意地址后把本站变成开放重定向器。
+ */
+const PAY_LINK_FILE = process.env.PAY_LINK_FILE ?? '/opt/feedwatch/pay-link.json';
+const ALLOWED_PAY_HOSTS = new Set(['link.payoneer.com', 'payoneer.com', 'www.payoneer.com']);
+
+function currentPayLink() {
+  try {
+    const raw = readFileSync(PAY_LINK_FILE, 'utf8');
+    const url = String(JSON.parse(raw)?.url ?? '').trim();
+    if (!url) return null;
+    let u;
+    try {
+      u = new URL(url);
+    } catch {
+      return null; // 非法 URL
+    }
+    if (u.protocol !== 'https:') return null;
+    if (!ALLOWED_PAY_HOSTS.has(u.hostname)) return null;
+    return url;
+  } catch {
+    return null; // 文件不存在或读失败
+  }
+}
 
 /**
  * 单账号监控点上限（与 /v1/usage 声明的 free 档位保持一致）。
@@ -238,6 +282,43 @@ const server = http.createServer(async (req, res) => {
 
     if (path === '/.well-known/mcp.json' || path === '/mcp.json') {
       return json(res, 200, serverManifest(`${PUBLIC_URL}/mcp`, 'https://github.com/your-org/feedwatch'));
+    }
+
+    // ---------- 付款跳转 ----------
+    // 放在鉴权区之前：这是公开的付费入口，任何访客都应能点到。
+    // 链接内容来自服务器配置文件，不含任何凭据。
+    if (path === '/pay') {
+      const url = currentPayLink();
+      if (!url) {
+        // 配置缺失/非法 —— 返回可读的提示页，而不是 404 或白屏，
+        // 否则客户会以为服务坏了（这正是「只声明不强制」的又一次变种：
+        // 落地页声明了付费入口，但链接受限时没有任何兜底说明）
+        const mail = `bruceonline2018@gmail.com`;
+        const page = `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>FeedWatch Pro — payment temporarily unavailable</title>
+<meta name="robots" content="noindex"><style>
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+background:#fbfaf8;color:#1a1a18;line-height:1.65;margin:0;
+display:flex;min-height:100vh;align-items:center;justify-content:center;padding:24px}
+.box{max-width:520px;background:#fff;border:1px solid #e3e1db;border-radius:12px;padding:36px}
+h1{font-size:21px;margin:0 0 14px;letter-spacing:-.01em}
+p{margin:0 0 14px;color:#5c5b56;font-size:15px}
+a{color:#c2410c}
+</style></head><body><div class="box">
+<h1>Payment is temporarily unavailable</h1>
+<p>The payment link is being refreshed. Nothing is wrong with your card or your account.</p>
+<p>In the meantime you can email <a href="mailto:${mail}">${mail}</a>
+and we will send you a payment link within 1 business day.</p>
+</div></body></html>`;
+        res.writeHead(503, {
+          'content-type': 'text/html; charset=utf-8',
+          'cache-control': 'no-store',
+        });
+        return res.end(page);
+      }
+      res.writeHead(302, { location: url, 'cache-control': 'no-store' });
+      return res.end();
     }
 
     if (path === '/' || path === '/docs') {

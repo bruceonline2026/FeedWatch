@@ -549,6 +549,51 @@ await t('服务绑定 127.0.0.1 而非 0.0.0.0（安全要求）', async () => {
   return '已确认仅监听本机';
 });
 
+// ---------- 付款跳转（Payoneer 单次链接的兜底）----------
+//
+// 背景（2026-10-17）：Payoneer 收款链接**每条只能用一次**。
+// 实测死链与活链的 HTTP 响应**完全相同**（都是 302 到 app.payoneer.com），
+// 只有浏览器渲染后才显示 "That payment link was already paid"。
+// → **程序无法自动检测链接是否作废**，只能靠「落地页不写死链接」来规避。
+
+await t('★ /pay 在配置缺失时返回可读提示页而非 404/白屏', async () => {
+  // 测试进程不加载 pay-link.json → currentPayLink() 返回 null → 应走 503 提示页
+  const r = await get('/pay');
+  assert(r.status === 503,
+    `配置缺失时应返回 503 提示页，实际 ${r.status} —— 白屏会被客户当成服务坏了`);
+  assert(/temporarily unavailable/i.test(r.text),
+    '提示页应说明「暂时不可用」');
+  assert(/mailto:.+@/.test(r.text),
+    '提示页必须给出联系邮箱，否则客户没有下一步可走');
+  return '503 提示页 + 联系邮箱';
+});
+
+await t('★ /pay 不接受任意外部跳转目标（防开放重定向）', async () => {
+  // currentPayLink() 只接受 payoneer.com 的 https URL。
+  // 本测试无法改文件，但可以验证「读不到文件时绝不 fallback 到任意地址」。
+  const r = await get('/pay');
+  const loc = r.headers?.location ?? '';
+  assert(loc === '' || /^https:\/\/(link\.)?payoneer\.com\//.test(loc),
+    `跳转目标只允许 payoneer.com，实际 ${loc || '(无 location，应为 503 提示页)'}`);
+  return '目标域白名单生效';
+});
+
+await t('★ 落地页按钮指向 /pay 而非 Payoneer 单次链接', async () => {
+  const { readFileSync } = await import('node:fs');
+  const problems = [];
+  for (const f of ['web/en.html', 'web/zh.html']) {
+    let page = '';
+    try { page = readFileSync(new URL(`../${f}`, import.meta.url), 'utf8'); } catch { continue; }
+    if (page.includes('link.payoneer.com'))
+      problems.push(`${f} 仍写死了 Payoneer 链接 → 该链接用一次即作废`);
+    if (!page.includes('href="/pay"'))
+      problems.push(`${f} 的付费按钮未指向 /pay`);
+  }
+  assert(problems.length === 0,
+    problems.join('；') || '');
+  return '两版落地页均走 /pay，无写死的单次链接';
+});
+
 child.kill('SIGTERM');
 await delay(300);
 
