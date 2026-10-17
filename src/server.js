@@ -9,6 +9,7 @@ import { readFileSync } from 'node:fs';
 import { MemoryStore, MonitorService, checkOnce, INTERVALS } from './service.js';
 import { handleMcpRequest, serverManifest } from './mcp/endpoint.js';
 import { mcpInfoPage } from './mcp/info-page.js';
+import { getKeyPage, EMAIL_RE } from './mcp/get-key-page.js';
 import { isPrivateAddress } from './security/ssrf.js';
 
 const HOST = process.env.HOST ?? '127.0.0.1';
@@ -27,10 +28,15 @@ const PUBLIC_URL = process.env.PUBLIC_URL ?? 'https://api.tiici.com';
  * 而**死链与活链的 HTTP 响应完全相同**（都是 302 到 app.payoneer.com），
  * 程序无法自动区分，只能靠浏览器渲染后的文案 —— 也就是说**无法自动告警**。
  *
- * ── 做法 ──
+ * ── 做法：链接池 ──
  * 落地页按钮指向 `${PUBLIC_URL}/pay`（**永不改变**），由本端点读取
- * 服务器上的 pay-link.json 里的当前有效链接并 302 跳转。
- * 链接用完 → 只改服务器上那一个文件 → **落地页、README、推文都不用动**。
+ * 服务器 pay-link.json 里的**链接数组**并 302 跳到第一条。
+ *
+ * 为什么不只存一条：验证期 0-5 个客户，**连续来两个客户就会撞链**。
+ * 一次备 3 条，就能「一个被用过 → 手动把下一条标记为 current」，
+ * 不必每次都现建链接（建一次要填 5 个字段，还容易触发符号黑名单）。
+ *
+ * 用完一条 → 只改服务器上那一个文件 → 落地页/README/推文都不用动。
  *
  * ── 安全 ──
  * 目标 URL 只允许 payoneer.com 域，且强制 https —— 防止配置文件被改成
@@ -39,23 +45,44 @@ const PUBLIC_URL = process.env.PUBLIC_URL ?? 'https://api.tiici.com';
 const PAY_LINK_FILE = process.env.PAY_LINK_FILE ?? '/opt/feedwatch/pay-link.json';
 const ALLOWED_PAY_HOSTS = new Set(['link.payoneer.com', 'payoneer.com', 'www.payoneer.com']);
 
-function currentPayLink() {
+/** 只接受白名单内的 https Payoneer 链接，否则返回 null */
+function safePayUrl(raw) {
+  const url = String(raw ?? '').trim();
+  if (!url) return null;
+  let u;
   try {
-    const raw = readFileSync(PAY_LINK_FILE, 'utf8');
-    const url = String(JSON.parse(raw)?.url ?? '').trim();
-    if (!url) return null;
-    let u;
-    try {
-      u = new URL(url);
-    } catch {
-      return null; // 非法 URL
-    }
-    if (u.protocol !== 'https:') return null;
-    if (!ALLOWED_PAY_HOSTS.has(u.hostname)) return null;
-    return url;
+    u = new URL(url);
   } catch {
-    return null; // 文件不存在或读失败
+    return null; // 非法 URL
   }
+  if (u.protocol !== 'https:') return null;
+  if (!ALLOWED_PAY_HOSTS.has(u.hostname)) return null;
+  return url;
+}
+
+/**
+ * 读取链接池，返回 { current, standby[] }。
+ *
+ * 兼容两种格式：
+ *   新：{ "current": "https://...", "standby": ["https://...", ...] }
+ *   旧：{ "url": "https://..." }   ← 10-17 之前的格式，避免配置丢失导致无链可用
+ */
+function payLinkPool() {
+  let cfg = {};
+  try {
+    cfg = JSON.parse(readFileSync(PAY_LINK_FILE, 'utf8')) ?? {};
+  } catch {
+    return { current: null, standby: [] };
+  }
+
+  const current = safePayUrl(cfg.current ?? cfg.url);
+  const rawList = Array.isArray(cfg.standby) ? cfg.standby : [];
+  const standby = rawList.map(safePayUrl).filter(Boolean);
+  return { current, standby };
+}
+
+function currentPayLink() {
+  return payLinkPool().current;
 }
 
 /**
@@ -98,6 +125,20 @@ const KEY_ISSUE_DAY_MS = 24 * 3600 * 1000;
 const KEY_ISSUE_DAILY_MAX = 20;
 
 /**
+ * 自助取 Key（GET/POST /get-key）的三层防护阈值。
+ *
+ * ⚠️ 这是**公开**的 Key 签发端点，没有引导密钥也能调，
+ * 所以这三层是「防无限 Key 机器」的唯一屏障，任何一层都不能省。
+ *
+ * 为什么按 IP 限流是主防线：邮箱可以随便填，用邮箱当限流键等于没限。
+ * IP 才是真实的资源成本单位。
+ */
+const GETKEY_IP_WINDOW_MS = 3600_000;
+const GETKEY_IP_MAX = 5;          // 同一 IP 每小时 5 把
+const GETKEY_DAY_WINDOW_MS = 24 * 3600 * 1000;
+const GETKEY_DAILY_MAX = 60;      // 全站每天 60 把
+
+/**
  * 允许跨域访问的来源白名单。
  *
  * 上线前审计修复：原先无条件返回 `access-control-allow-origin: *`，
@@ -121,12 +162,21 @@ const service = new MonitorService(store, { maxMonitors: MAX_MONITORS });
  * 现在支持用环境变量注入一把启动密钥，仅从环境读取，不落盘、不打印明文。
  */
 const BOOTSTRAP_KEY = process.env.FEEDWATCH_BOOTSTRAP_KEY;
+let bootstrapId = null; // 引导密钥的记录 id —— 自助签发的 Key 挂在它下面
 if (BOOTSTRAP_KEY) {
   if (BOOTSTRAP_KEY.length < 32) {
     console.error('[feedwatch] FEEDWATCH_BOOTSTRAP_KEY 过短（<32 字符），已拒绝启动');
     process.exit(1);
   }
-  store.seedApiKey(BOOTSTRAP_KEY, 'bootstrap');
+  const seeded = store.seedApiKey(BOOTSTRAP_KEY, 'bootstrap');
+  // ⚠️ seedApiKey 在「该密钥已存在」时返回 null —— 而引导密钥由环境变量注入，
+  //   进程重启后内存里本就没有它，所以正常情况下会返回 { id }。
+  //   但一旦返回 null，bootstrapId 会是 null，自助签发的 Key 就挂不到根节点，
+  //   限流分桶会退化。兜底：直接按明文反查记录拿 id。
+  bootstrapId = seeded?.id ?? store.findApiKey(BOOTSTRAP_KEY)?.id ?? null;
+  if (!bootstrapId) {
+    console.error('[feedwatch] 无法确定引导密钥 id —— 自助取 Key 签发的 Key 将挂不到根节点');
+  }
   console.log('[feedwatch] 已载入引导密钥（来自 FEEDWATCH_BOOTSTRAP_KEY）');
 }
 service.startAll();
@@ -284,6 +334,102 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, serverManifest(`${PUBLIC_URL}/mcp`, 'https://github.com/your-org/feedwatch'));
     }
 
+    // ---------- 自助取 Key ----------
+    //
+    // ⚠️ 这是**公开的 Key 签发端点**（徐总 2026-10-17 要求：
+    // 「Start free」原本跳到三步接入说明，用户拿不到 Key 就走了）。
+    //
+    // 因此三层防护缺一不可 —— 少任何一层，这个端点就是一台
+    // 「无限 Key 机器」：
+    //   ① 邮箱格式校验        挡掉明显的脚本
+    //   ② 按 IP 限流 5 把/小时  挡单 IP 批量
+    //   ③ 全局日上限 60 把/天    挡换 IP / 分布式
+    //
+    // 为什么用 IP 而不是邮箱做主限流键：邮箱可以随便填，
+    // 用它当键等于没有限制。IP 才是真实的成本单位。
+    if (path === '/get-key') {
+      if (req.method === 'GET') {
+        res.writeHead(200, {
+          'content-type': 'text/html; charset=utf-8',
+          'cache-control': 'no-store',
+        });
+        return res.end(getKeyPage({
+          remaining: Math.max(0, GETKEY_DAILY_MAX - rateLimitPeek('getkey-day')),
+        }));
+      }
+      if (req.method === 'POST') {
+        const ip = req.socket.remoteAddress ?? 'unknown';
+        const ipKey = `getkey-ip:${ip}`;
+
+        // ② IP 小时限流
+        if (!rateLimit(ipKey, { windowMs: GETKEY_IP_WINDOW_MS, max: GETKEY_IP_MAX })) {
+          res.writeHead(429, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
+          return res.end(getKeyPage({
+            email: null,
+            error: `Too many keys from this network. Try again in about ${Math.round(GETKEY_IP_WINDOW_MS / 60000)} minutes, or email bruceonline2018@gmail.com.`,
+          }));
+        }
+
+        // ③ 全局日上限（check-then-act：先占位再签发，避免并发穿透）
+        if (!rateLimit('getkey-day', { windowMs: GETKEY_DAY_WINDOW_MS, max: GETKEY_DAILY_MAX })) {
+          res.writeHead(429, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
+          return res.end(getKeyPage({
+            email: null,
+            error: 'Daily self-service limit reached. Email bruceonline2018@gmail.com and we will issue a key manually within 1 business day.',
+          }));
+        }
+
+        const body = await readBody(req);
+
+        // ⚠️ **必须同时支持两种提交格式**（2026-10-17 修）
+        //
+        // 页面里放的是标准 HTML <form>，浏览器提交的是
+        // `application/x-www-form-urlencoded`，**不是 JSON**。
+        // 原实现只 `JSON.parse(body)` → 浏览器真实提交一律 parse 失败
+        // → 走到「邮箱为空」→ 400。
+        //
+        // 这就是「只声明不强制」：页面声明了「填邮箱拿 Key」，
+        // 但后端只实现了 JSON 那条路，**没人用真浏览器试过**，
+        // 所以测试全绿（测试用的都是 fetch + JSON）。
+        //
+        // 现在两种都认，且 e2e 有断言逼住「表单提交也必须能签发出 Key」。
+        let email = '';
+        const ctype = String(req.headers['content-type'] ?? '');
+        if (ctype.includes('application/json')) {
+          try {
+            email = String(JSON.parse(body || '{}').email ?? '').trim();
+          } catch { /* 非 JSON，按空处理 */ }
+        } else {
+          // 浏览器表单：email=foo%40bar.com
+          try {
+            email = String(new URLSearchParams(body || '').get('email') ?? '').trim();
+          } catch { /* 非法编码，按空处理 */ }
+        }
+        email = email.slice(0, 120);
+
+        // ① 邮箱格式校验
+        if (!EMAIL_RE.test(email)) {
+          res.writeHead(400, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
+          return res.end(getKeyPage({
+            email,
+            error: 'That does not look like a valid email address. Example: you@example.com',
+          }));
+        }
+
+        // 签发：标记 parentId=bootstrap 根、isBootstrap=false
+        // → 与内部引导密钥签发的 Key 同源，但**不能签发新 Key**（D8 门控仍生效）
+        const label = `selfservice:${email.split('@')[1] ?? 'unknown'}`;
+        const k = store.createApiKey(label, { parentId: bootstrapId, isBootstrap: false });
+
+        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
+        return res.end(getKeyPage({
+          email,
+          issued: { key: k.raw, label },
+          remaining: Math.max(0, GETKEY_DAILY_MAX - rateLimitPeek('getkey-day')),
+        }));
+      }
+    }
+
     // ---------- 付款跳转 ----------
     // 放在鉴权区之前：这是公开的付费入口，任何访客都应能点到。
     // 链接内容来自服务器配置文件，不含任何凭据。
@@ -386,6 +532,7 @@ and we will send you a payment link within 1 business day.</p>
       /^\/v1\/monitors$/,
       /^\/v1\/monitors\/[^/]+$/,
       /^\/v1\/monitors\/[^/]+\/check$/,
+      /^\/v1\/pay-links$/,
     ];
     if (!KNOWN.some((re) => re.test(path))) {
       return err(res, 404, `无此端点：${req.method} ${path}`);
@@ -394,6 +541,23 @@ and we will send you a payment link within 1 business day.</p>
     // ---------- 鉴权区 ----------
     const auth = authenticate(req);
     if (!auth) return err(res, 401, '缺少或无效的 API Key（请用 x-api-key 头）');
+
+    // ---------- 付款链接库存（需鉴权） ----------
+    //
+    // ⚠️ **必须放在鉴权区之内**：这里能看出「还剩几条可用链接」，
+    //    是内部运营信息。放在鉴权区外等于公开告诉访客「备用链接还剩几条」，
+    //    对手可以据此判断什么时候来薅。而且这里**绝不能返回 URL 原文**，
+    //    否则等于把备用链接直接送给任何人。
+    if (path === '/v1/pay-links' && req.method === 'GET') {
+      const { current, standby } = payLinkPool();
+      return json(res, 200, {
+        has_current: Boolean(current),
+        standby_count: standby.length,
+        total: (current ? 1 : 0) + standby.length,
+        // 库存耗尽必须能一眼看出 —— 否则会一直撞「already paid」
+        needs_new_link: !current || standby.length === 0,
+      });
+    }
 
     if (path === '/v1/apikeys' && req.method === 'POST') {
       // ══ D8：签发仅限引导密钥（2026-10-16 补）══

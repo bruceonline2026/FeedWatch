@@ -65,6 +65,36 @@ const post = async (p, body, headers = {}) => {
   return { status: r.status, text, json };
 };
 
+/**
+ * 以表单方式 POST，返回文本。
+ *
+ * /get-key 的表单是标准 HTML form（application/x-www-form-urlencoded），
+ * 但服务端为便于前端调试同时接受 JSON —— 这里两种都测，
+ * 顺便验证「同一个端点认不认真实浏览器的提交格式」。
+ */
+const postRaw = async (p, bodyJson) => {
+  const asJson = await fetch(B + p, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: bodyJson,
+  });
+  const t1 = await asJson.text();
+  let j1 = null;
+  try { j1 = JSON.parse(t1); } catch { /* HTML */ }
+
+  // 再用真实浏览器的表单格式打一次，确认兼容
+  const params = new URLSearchParams({ email: JSON.parse(bodyJson).email ?? '' });
+  const asForm = await fetch(B + p, {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: params.toString(),
+    redirect: 'manual',
+  });
+  const t2 = await asForm.text();
+
+  return { status: asJson.status, text: t1, json: j1, formStatus: asForm.status, formText: t2 };
+};
+
 // PATCH / DELETE 辅助函数 —— 2026-10-15 补。
 // 原脚本只有 get/post，导致「缺陷 8（PATCH 静默停调度）」与「IDOR 的 PATCH/DELETE 分支」
 // 这两处从未被任何测试触达 —— 回退修复后 87 项仍全绿。
@@ -592,6 +622,109 @@ await t('★ 落地页按钮指向 /pay 而非 Payoneer 单次链接', async () 
   assert(problems.length === 0,
     problems.join('；') || '');
   return '两版落地页均走 /pay，无写死的单次链接';
+});
+
+// ---------- 自助取 Key（公开签发端点，最需要防护的地方）----------
+
+await t('★ /get-key 首屏可访问且不需要鉴权', async () => {
+  const r = await get('/get-key');
+  assert(r.status === 200, `应 200，实际 ${r.status}`);
+  assert(/Get your free API key/.test(r.text), '首屏应显示「获取免费 Key」标题');
+  assert(/name="email"/.test(r.text), '应有邮箱输入框');
+  return '公开可访问，含邮箱表单';
+});
+
+await t('★ /get-key 签发的 Key 真能用（不是只发个字符串）', async () => {
+  const r = await postRaw('/get-key', JSON.stringify({ email: 'e2e-test@example.com' }));
+  assert(r.status === 200, `JSON 提交应 200，实际 ${r.status}`);
+  const m = r.text.match(/fw_[0-9a-f]{32}/);
+  assert(m, `页面应含签发出的 Key，实际内容：${r.text.slice(0, 200)}`);
+  const key = m[0];
+  assert(!r.text.includes('&lt;'), 'Key 不应被 HTML 转义（否则用户复制到的是错的）');
+
+  // ⚠️ 真实浏览器提交的是 application/x-www-form-urlencoded，不是 JSON。
+  //   只测 JSON 等于「声称支持表单，实际浏览器用不了」。
+  assert(r.formStatus === 200,
+    `表单提交（真实浏览器用的格式）应 200，实际 ${r.formStatus}`);
+  assert(/fw_[0-9a-f]{32}/.test(r.formText),
+    '表单提交也应签发出 Key —— 否则用户点「Create my key」拿到的是错误提示页');
+
+  // 关键验证：这把 Key 能真的调 API
+  const u = await get('/v1/monitors', { 'x-api-key': key });
+  assert(u.status === 200,
+    `自助签发的 Key 应能访问 API，实际 ${u.status} —— 说明这把 Key 是假的`);
+  return `已签发并验证可用（JSON + 表单两种格式）`;
+});
+
+await t('★ /get-key 签发的 Key 不能签发新 Key（D8 门控不被绕过）', async () => {
+  const r = await postRaw('/get-key', JSON.stringify({ email: 'e2e-d8@example.com' }));
+  const key = r.text.match(/fw_[0-9a-f]{32}/)?.[0];
+  assert(key, '应签发出 Key');
+  const sub = await post('/v1/apikeys', { label: 'sneaky' }, { 'x-api-key': key });
+  assert(sub.status === 403,
+    `自助 Key 调签发端点应 403，实际 ${sub.status} —— 公开签发端点绕过了 D8 门控`);
+  return '仍被 D8 挡住（403）';
+});
+
+await t('★ /get-key 拒绝非法邮箱且不发 Key', async () => {
+  const r = await postRaw('/get-key', JSON.stringify({ email: 'not-an-email' }));
+  assert(r.status === 400, `非法邮箱应 400，实际 ${r.status}`);
+  assert(!/fw_[0-9a-f]{32}/.test(r.text), '**不应签发出 Key** —— 校验失败也发 Key 等于无限制发 Key');
+  assert(/valid email/i.test(r.text), '应提示邮箱格式无效');
+  return '400 拒绝，未签发';
+});
+
+await t('★ /get-key 有 IP 限流（连续签发会被拦住）', async () => {
+  // 前两个测试已消耗 2 把，本测试再连签若干把 → 应触发 5 把/小时的上限
+  const codes = [];
+  for (let i = 0; i < 8; i++) {
+    const r = await postRaw('/get-key', JSON.stringify({ email: `burst${i}@example.com` }));
+    codes.push(r.status);
+    if (r.status === 429) break;
+  }
+  assert(codes.includes(429),
+    `连续签发必须被限流拦住，实际状态码序列 ${codes.join(',')} —— 公开端点无 IP 限流 = 无限 Key 机器`);
+  const last = codes.at(-1);
+  assert(last === 429 || codes.filter((c) => c === 200).length <= 6,
+    `放行数量应受限（≤6），实际 ${codes.filter((c) => c === 200).length} 把`);
+  return `放行 ${codes.filter((c) => c === 200).length} 把后被 429 拦住`;
+});
+
+await t('★ /get-key 页面不泄露内部信息', async () => {
+  const r = await get('/get-key');
+  assert(!/BOOTSTRAP|FEEDWATCH_/.test(r.text), '不应出现环境变量名');
+  assert(!/127\.0\.0\.1|localhost/.test(r.text), '不应出现内部地址/端口');
+  assert(!/MAX_MONITORS|standby_count/.test(r.text), '不应出现内部配置名或链接库存');
+  return '无环境变量名 / 内部地址 / 内部配置';
+});
+
+await t('★ 落地页「免费」按钮指向 /get-key 而非说明区', async () => {
+  const { readFileSync } = await import('node:fs');
+  const problems = [];
+  for (const f of ['web/en.html', 'web/zh.html']) {
+    let page = '';
+    try { page = readFileSync(new URL(`../${f}`, import.meta.url), 'utf8'); } catch { continue; }
+    if (!page.includes('href="/get-key"'))
+      problems.push(`${f} 没有指向 /get-key 的入口`);
+    // 免费档按钮不能跳到 #how 说明区（用户会看不到 Key 就走）
+    const m = page.match(/<a href="#how"[^>]*btn[^>]*>([^<]*)</);
+    if (m) problems.push(`${f} 仍有按钮指向 #how 说明区：${m[1]}`);
+  }
+  assert(problems.length === 0, problems.join('；') || '');
+  return '两版均有自助取 Key 入口';
+});
+
+await t('★ 付款链接库存端点需要鉴权（内部信息不外泄）', async () => {
+  const noAuth = await get('/v1/pay-links');
+  assert(noAuth.status === 401,
+    `/v1/pay-links 无 Key 应 401，实际 ${noAuth.status} —— 链接库存是内部运营信息`);
+  const withAuth = await get('/v1/pay-links', AUTH);
+  assert(withAuth.status === 200, `有 Key 应 200，实际 ${withAuth.status}`);
+  assert(typeof withAuth.json?.standby_count === 'number',
+    '应返回 standby_count');
+  assert(!JSON.stringify(withAuth.json).includes('link.payoneer.com'),
+    '**绝不能返回 URL 原文** —— 那等于把备用链接送给任何拿到 Key 的人');
+  return '无 Key 401；有 Key 返回数量但不含 URL';
 });
 
 child.kill('SIGTERM');
