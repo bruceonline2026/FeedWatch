@@ -32,11 +32,26 @@
  *   所以不存在「写到一半的 JSON 被读出来」这种状态。
  */
 
-import { readFileSync, writeFileSync, renameSync, existsSync, mkdirSync, openSync, fsyncSync, closeSync } from 'node:fs';
+import {
+  readFileSync, writeFileSync, renameSync, existsSync, mkdirSync,
+  openSync, fsyncSync, closeSync, chmodSync, unlinkSync,
+} from 'node:fs';
 import { dirname, join } from 'node:path';
 
 /** 当前 schema 版本 —— 将来结构变了靠它做迁移 */
 const SCHEMA_VERSION = 1;
+
+/**
+ * ⚠️ 落盘文件权限必须是 600（仅属主可读写）。
+ *
+ * 快照里明文存着 feed 条目标题与正文 —— 那是我们客户的数据。
+ * 默认的 644 意味着**同机器上任何用户都能读到**（实测 `sudo -u nobody` 能读出来），
+ * 在有多个服务共用的机器上就是泄露。
+ *
+ * 同理目录要 700。这两行不是「加固建议」，是**必须项**。
+ */
+const FILE_MODE = 0o600;
+const DIR_MODE = 0o700;
 
 export class PersistentStore {
   /**
@@ -68,6 +83,8 @@ export class PersistentStore {
       try {
         const backup = `${this.file}.corrupt-${Date.now()}`;
         renameSync(this.file, backup);
+        // ⚠️ 备份文件同样含 feed 标题与正文，权限不能比原文件松
+        try { chmodSync(backup, FILE_MODE); } catch { /* 见 save() 内的同类说明 */ }
         console.error(
           `[feedwatch] 持久化文件损坏，已另存为 ${backup}，将以空数据启动：${e.message}`,
         );
@@ -84,19 +101,26 @@ export class PersistentStore {
     if (!this.enabled) return false;
     try {
       const dir = dirname(this.file);
-      if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+      if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: DIR_MODE });
+      // ⚠️ 目录权限也要收紧 —— 已存在的目录（如被手工建过）不会自动跟着变
+      try { chmodSync(dir, DIR_MODE); } catch { /* 无权限时由部署流程保证 */ }
 
       const payload = JSON.stringify({ version: SCHEMA_VERSION, saved_at: new Date().toISOString(), ...data });
       // 临时文件 + rename = 原子替换，崩溃时不会留下半个 JSON
       const tmp = `${this.file}.tmp`;
-      writeFileSync(tmp, payload, 'utf8');
-      // fsync 确保数据真的落到磁盘（rename 之前必须先落盘）
+      // ⚠️ writeFileSync 的 mode 参数**只在文件被创建时生效**。
+      //   已存在的文件会保留旧权限 —— 所以下面 rename 之后还要再 chmod 一次，
+      //   否则「首次创建时是 600、后来变 644」这种漂移无法察觉。
+      writeFileSync(tmp, payload, { encoding: 'utf8', mode: FILE_MODE });
       try {
         const fd = openSync(tmp, 'r');
         fsyncSync(fd);
         closeSync(fd);
       } catch { /* 某些文件系统不支持 fsync，rename 仍是原子的 */ }
       renameSync(tmp, this.file);
+      // rename 会保留源文件的权限位（tmp 已是 600），但为防既有文件权限不对，
+      // 这里显式再设一次 —— 幂等，且是唯一能修正历史遗留权限的地方
+      try { chmodSync(this.file, FILE_MODE); } catch { /* 见上 */ }
       return true;
     } catch (e) {
       // ⚠️ 写盘失败**必须让上层知道** —— 静默失败等于假装存了，

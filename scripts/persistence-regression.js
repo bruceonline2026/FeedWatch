@@ -242,6 +242,67 @@ await t('FEEDWATCH_PERSIST=off 可退回纯内存（测试与应急）', async (
 });
 
 await FIX.close();
+await t('★ 落盘文件权限必须是 600（同机器其他用户读不到）', async () => {
+  // ⚠️ 2026-10-17 事故：文件以默认 644 创建，实测 `sudo -u nobody` 能读出
+  //   feed 标题与正文 —— 那是我们客户的数据。
+  //   权限漂移是**静默**的（没有报错、没有告警），所以必须用测试锁住。
+  const { statSync } = await import('node:fs');
+  const p = await boot(3198);
+  try {
+    const auth = { 'content-type': 'application/json', 'x-api-key': API_KEY };
+    await fetch('http://127.0.0.1:3198/v1/monitors', {
+      method: 'POST', headers: auth,
+      body: JSON.stringify({ name: 'perm-check', url: `${FIX.url}?perm=1` }),
+    });
+    await delay(300);
+    const st = statSync(DB);
+    const mode = st.mode & 0o777;
+    assert(mode === 0o600,
+      `数据文件权限必须是 600（仅属主），实际 ${mode.toString(8)}`
+      + ' —— 644 意味着同机器任何用户可读客户 feed 内容');
+    return `文件权限 ${mode.toString(8)} ✓`;
+  } finally { await stop(p); }
+});
+
+await t('★ 数据目录权限必须是 700', async () => {
+  const { statSync } = await import('node:fs');
+  const mode = statSync(DIR).mode & 0o777;
+  assert(mode === 0o700,
+    `数据目录权限必须是 700，实际 ${mode.toString(8)} —— 目录宽松等于文件可被遍历`);
+  return `目录权限 ${mode.toString(8)} ✓`;
+});
+
+await t('重启后基线可用于字段级 diff（不是只判断有无变化）', async () => {
+  // 存快照不只是为了「知道变了」—— 必须是**字段级**的，
+  // 否则落盘快照就没有意义（那不如只存个 hash）。
+  const { Snapshot, diffSnapshots } = await import('../src/diff/engine.js');
+  const { PersistentStore } = await import('../src/persistence.js');
+  const { MemoryStore } = await import('../src/service.js');
+  const f = join(DIR, 'field-diff.json');
+  const mk = (title) => new Snapshot('https://x.com/feed', {
+    format: 'rss', title: 'F',
+    items: [{ id: '1', title, contentHash: 'h', link: 'https://x.com/1', contentText: '正文' }],
+  }, new Date().toISOString());
+
+  const s1 = new MemoryStore({ persistence: new PersistentStore(f) });
+  const mon = s1.createMonitor({ url: 'https://x.com/feed' });
+  s1.saveSnapshot(mon.id, mk('原标题'));
+  s1.persistNow();
+
+  const s2 = new MemoryStore({ persistence: new PersistentStore(f) });
+  s2.restore(new PersistentStore(f).load());
+  const prev = s2.getSnapshot(mon.id);
+  assert(prev, '重启后应恢复出基线');
+
+  const d = diffSnapshots(prev, mk('改过的标题'));
+  assert(d.changed === true, '内容变化应检出');
+  const t = d.changes[0]?.diff?.find((x) => x.field === 'title');
+  assert(t, `应报出 title 字段级 diff，实际 ${JSON.stringify(d.changes[0]?.diff)}`);
+  assert(String(t.old) === '原标题' && String(t.new) === '改过的标题',
+    `diff 应含新旧值，实际 ${JSON.stringify(t)}`);
+  return `title「${t.old}」→「${t.new}」（落盘保留了 diff 所需的旧值）`;
+});
+
 rmSync(DIR, { recursive: true, force: true });
 console.log(`\n═══ 结果：${pass} 项通过，${fail} 项失败 ═══\n`);
 process.exit(fail === 0 ? 0 : 1);
