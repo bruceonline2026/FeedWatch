@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Privacy Policy — FeedWatch</title>
-<meta name="description" content="FeedWatch privacy policy: API keys are stored as SHA-256 hashes and never in plaintext, feed content is processed in memory and never written to disk.">
+<meta name="description" content="FeedWatch privacy policy: API keys are stored as SHA-256 hashes and never in plaintext; to compute field-level diffs, a plaintext copy of feed entry titles and bodies is stored on our servers' disk. We do not analyse, resell or share it. Full list at api.tiici.com/v1/data-handling.">
 <link rel="canonical" href="https://api.tiici.com/privacy">
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
@@ -73,23 +73,31 @@ footer{border-top:1px solid var(--border);padding:24px 0;color:var(--text-3);fon
 <main>
 <div class="wrap">
   <h1>Privacy Policy</h1>
-  <p class="lede">Short version: your API key is stored only as a hash, your feed content is processed in memory and never written to disk, and we do not sell or share your data with anyone.</p>
-  <p class="updated">Last updated: 16 October 2026</p>
+  <p class="lede">Short version: your API key is stored only as a hash, never in plaintext. In order to tell you <em>which field</em> changed and what it changed from, we keep a plaintext copy of feed entries on our server's disk &mdash; that is a requirement of the capability you are paying for. We do not sell, share, profile, or link your data to anyone else's.</p>
+  <p class="updated">Last updated: 17 October 2026</p>
 
   <div class="callout">
-    <p><strong>What we actually keep:</strong> a SHA-256 hash of your API key, the monitor URLs you gave us, your plan tier, and error messages from failed fetches. Everything lives in memory on our server.</p>
+    <p><strong>What we actually keep:</strong> a SHA-256 hash of your API key, the monitor URLs and names you gave us, the titles and bodies of the feed entries you monitor (plaintext), error messages, and the domain part of the email you used to obtain a key. <strong>Except for your API key's plaintext, all of this lives on our server's disk</strong> in a file readable only by the service process.</p>
+    <p><strong>The complete, machine-readable inventory: <a href="/v1/data-handling"><code>GET /v1/data-handling</code></a></strong> (public, no authentication required). That endpoint is checked against the actual on-disk fields by an automated test; <strong>if this page and that endpoint ever disagree, the endpoint is authoritative</strong> and this page will be corrected.</p>
   </div>
 
   <h2>What we store, and for how long</h2>
   <table>
     <tr><th>Data</th><th>Form</th><th>Kept for</th></tr>
-    <tr><td>API key</td><td><strong>SHA-256 hash only</strong> — the plaintext is shown once at creation and never written anywhere</td><td>Until you delete the key or the service restarts</td></tr>
-    <tr><td>Monitor URLs</td><td>Plaintext, in memory</td><td>Until you delete the monitor</td></tr>
-    <tr><td>Feed content</td><td><strong>Never stored</strong> — parsed in memory, diffed, then discarded</td><td>Seconds</td></tr>
-    <tr><td>Detected changes</td><td>Delivered to your webhook, then discarded</td><td>Seconds</td></tr>
-    <tr><td>Error messages</td><td>Plaintext, in memory (e.g. &ldquo;upstream returned HTTP 403&rdquo;)</td><td>Until the next successful check</td></tr>
-    <tr><td>Server access logs</td><td>Request path, status, IP, timestamp — <strong>no request bodies</strong></td><td>As configured on the host</td></tr>
+    <tr><td>API key</td><td><strong>SHA-256 hash only</strong> &mdash; the plaintext is shown once at creation and never written anywhere</td><td>Until you revoke the key (contact us)</td></tr>
+    <tr><td>Monitor URLs and names</td><td>Plaintext, on disk (survives a restart)</td><td>Until you delete the monitor</td></tr>
+    <tr><td><strong>Feed entry content</strong><br>(title / body / link / author / category / published date)</td><td><strong>Plaintext copy, on disk</strong> &mdash; used to compute field-level diffs. Overwritten on every check</td><td>For as long as the monitor exists; deleted together with it</td></tr>
+    <tr><td>The <strong>domain</strong> of the email you used to get a key</td><td>Plaintext, on disk (domain only, e.g. <code>example.com</code>)</td><td>Long-term</td></tr>
+    <tr><td>Detected changes</td><td>Push notifications contain only hashes and lengths &mdash; <strong>never full entry text</strong></td><td>Not additionally retained</td></tr>
+    <tr><td>Error messages</td><td>Plaintext, on disk (e.g. &ldquo;upstream returned HTTP 403&rdquo;)</td><td>Until the next successful check</td></tr>
+    <tr><td>Webhook configuration</td><td>Address on disk; the <strong>HMAC signing key is stored only as a hash, never in plaintext</strong></td><td>For as long as the monitor exists</td></tr>
+    <tr><td>Server access logs</td><td>Request path, status, IP, timestamp &mdash; <strong>no request bodies</strong></td><td>As configured on the host</td></tr>
   </table>
+
+  <div class="note">
+    <p><strong>Why do we store feed entries in plaintext?</strong> Because the core capability we promise is telling you <em>which field</em> changed and what it changed from, rather than merely &ldquo;there is an update&rdquo;. To output &ldquo;the title went from A to B&rdquo;, both A and B must exist on disk. If we stored only hashes, they would be irreversible and we could tell you <em>that</em> something changed but never <em>what</em> it changed to &mdash; which degrades the product into a generic &ldquo;this page changed&rdquo; notifier, the very thing we are not selling.</p>
+    <p>This content is itself a public feed, at an address you gave us. <strong>We cache it only to compute your diff.</strong></p>
+  </div>
 
 
   <h2>What we additionally record (counts only, never your data)</h2>
@@ -106,7 +114,7 @@ footer{border-top:1px solid var(--border);padding:24px 0;color:var(--text-3);fon
   </table>
 
   <div class="callout">
-    <p><strong>These records contain <em>none</em> of:</strong></p>
+    <p><strong>These <em>statistics records</em> contain <em>none</em> of:</strong></p>
     <p>&middot; your monitor URLs<br>
        &middot; feed titles, bodies or authors<br>
        &middot; the changes we detect<br>
@@ -115,32 +123,66 @@ footer{border-top:1px solid var(--border);padding:24px 0;color:var(--text-3);fon
        &middot; request headers, browser fingerprint or source IP</p>
     <p>In other words: <strong>we know that 3 people hit the limit,
        but not who they are or what sites they monitor.</strong></p>
+    <p style="margin-top:10px"><strong>Please note the distinction:</strong> the list above
+       describes the <em>operational statistics log</em> (<code>events-*.jsonl</code>), which
+       really does contain only aggregate counts. Your monitors and feed content
+       <strong>are stored on disk</strong> &mdash; see the &ldquo;What we store, and for how long&rdquo;
+       table above. These two facts do not conflict: the statistics log does not record your
+       data, but the service itself caches your data in order to compute your diffs.</p>
   </div>
 
   <h3>Why this deserves its own section</h3>
   <p>Most monitoring tools embed third-party trackers. We do not &mdash; so this
      list <strong>is the complete inventory</strong>; there is no second,
-     hidden analytics system. You can ask us to delete your records.</p>
+     hidden analytics system.</p>
 
+  <h2>Three things worth spelling out</h2>
 
   <h3>Your API key is never stored in plaintext</h3>
   <p>When you create a key, the response contains it <strong>exactly once</strong>.
      From then on we keep only <code>SHA-256(key)</code> and compare against that.
-     Even someone with full read access to our server&rsquo;s memory cannot
-     reconstruct your key from what we hold.</p>
+     Even someone with full read access to our server data files cannot
+     reconstruct your key&rsquo;s plaintext from what we hold.</p>
   <p>The trade-off is honest: <strong>we cannot show you a lost key</strong>, and we
      cannot email it back to you. If you lose it, you create a new one.</p>
 
-  <h3>Feed content is not written to disk</h3>
-  <p>When we check a feed, the response body is parsed in memory, compared against
-     the previous snapshot, and dropped. There is no database, no file, no cache.
-     We do not build a shadow copy of the internet.</p>
+  <h3>What we cache, why, and what we never do with it</h3>
+  <p>To provide field-level changes &mdash; telling you the title went from A to B, rather
+     than just &ldquo;there is an update&rdquo; &mdash; we must keep the previous copy of the
+     feed on disk to compare against.
+     <strong>This is a requirement of the capability, not a choice we made.</strong></p>
+  <p><strong>What we never do:</strong></p>
+  <ul>
+    <li>We do not analyse, resell, or share this content with anyone</li>
+    <li>We do not profile you, and we do <strong>not link data across customers</strong></li>
+    <li>Push notifications contain only hashes and lengths &mdash; <strong>never full entry text</strong></li>
+    <li>We do not use advertising networks, analytics trackers, or third-party data brokers</li>
+  </ul>
+  <p>This content is itself a public feed, at an address you gave us. <strong>We cache it only to compute your diff.</strong></p>
 
-  <h3>Monitors do not survive a restart — which cuts both ways</h3>
-  <p>Because everything is in memory, a restart clears all monitors and keys.
-     That is good for privacy and bad for reliability. Persistent storage is planned
-     for the next version; when it arrives, this policy will change and you will be
-     told before it does.</p>
+  <h3>How long we keep it, and how to delete it</h3>
+  <p>Your data is <strong>kept for as long as your monitor exists</strong>, with the
+     baseline overwritten on every check. When you delete a monitor, its cached feed
+     content <strong>is deleted with it</strong>.</p>
+  <p>You can do these yourself, at any time:</p>
+  <ul>
+    <li><strong>Check that the service is actually working</strong> &mdash; call
+        <code>GET /v1/monitors</code>. Every monitor returns
+        <code>last_checked_at</code>, <code>last_check_ok</code>,
+        <code>last_error</code> and <code>next_check_at</code>. If
+        <code>last_check_ok</code> is <code>true</code> and <code>last_error</code> is
+        <code>null</code>, the most recent check succeeded.</li>
+    <li><strong>Delete a monitor and its cached feed content</strong> &mdash;
+        <code>DELETE /v1/monitors/{id}</code></li>
+  </ul>
+  <p>⚠️ <strong>Two things we cannot do self-service, and we would rather say so
+     than let you assume a button exists:</strong></p>
+  <ul>
+    <li><strong>Revoking a key</strong> &mdash; there is no self-service endpoint yet; email us.</li>
+    <li><strong>Deleting your entire account data</strong> (including your API key hash and
+        email domain) &mdash; currently performed manually by us; email us and we will do it
+        within 1 business day.</li>
+  </ul>
 
   <h2>What we send to third parties</h2>
   <table>
@@ -171,12 +213,20 @@ footer{border-top:1px solid var(--border);padding:24px 0;color:var(--text-3);fon
   <h2>Your rights</h2>
   <p>You can, at any time:</p>
   <ul>
-    <li>Delete any monitor you created</li>
-    <li>Ask what data we hold about you — and the answer will be short, because there isn&rsquo;t much</li>
-    <li>Request deletion of your account data</li>
+    <li><strong>Self-service:</strong> delete any monitor you created
+        (<code>DELETE /v1/monitors/{id}</code>) &mdash; its cached feed content is deleted with it</li>
+    <li><strong>Self-service:</strong> check the service's status
+        (<code>GET /v1/monitors</code>) &mdash; each monitor's last check time, success flag
+        and error message</li>
+    <li><strong>Ask what data we hold about you</strong> &mdash;
+        <code>GET /v1/data-handling</code> lists every field name; email us for the actual values</li>
+    <li>Request deletion of your account data &mdash; <strong>this one currently requires
+        manual handling</strong>, see the section above</li>
   </ul>
-  <p>Because everything is in memory and there is no database, deleting your account
-     is effectively a restart plus invalidating your key. We will do it for you on request.</p>
+  <p>⚠️ <strong>We state the limits of what currently works honestly:</strong> there is
+     no self-service &ldquo;delete everything&rdquo; endpoint, and no self-service key
+     revocation. Both require an email to us. We are telling you here rather than letting
+     you assume a button exists.</p>
 
   <h2>Children</h2>
   <p>FeedWatch is a developer tool and is not directed at anyone under 16. We do not

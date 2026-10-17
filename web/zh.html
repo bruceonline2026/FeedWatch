@@ -477,9 +477,26 @@ check_feed(url)                                        <span class="c">立即检
     </details>
     <details>
       <summary>数据存在哪里？会保存 feed 内容吗？</summary>
-      <p>快照只保存计算 diff 所需的字段与哈希，用于比对，不存储完整正文原文。
-      监控点配置与状态在当前版本存于内存，服务重启后清空 —— 这是测试期的已知限制，
-      正式版本会迁移到持久化存储。</p>
+      <p><b>会保存 feed 条目的明文副本</b>（标题、正文、链接、作者、分类），
+      存在服务器磁盘上。原因是我们的核心能力是「告诉你哪个字段从什么变成什么」——
+      要输出「标题从 A变成 B」，磁盘上必须同时有A 和 B。</p>
+      <p>这些数据<b>随监控点保留，删除监控点即一并删除</b>。我们不会分析、转卖或与任何人共享，
+      不做画像、不做跨客户关联。推送给你时只发哈希与长度，不发正文全文。
+      你的 API Key 只存 SHA-256 哈希，明文从不保存。</p>
+      <p>监控点配置与状态也存于磁盘，<b>服务重启、升级、打补丁都不会丢</b>。
+      完整字段清单见 <a href="/v1/data-handling"><code>GET /v1/data-handling</code></a>（公开）
+      或 <a href="/zh/privacy">隐私政策</a>。</p>
+    </details>
+    <details>
+      <summary>怎么确认服务真的在跑？</summary>
+      <p>不用联系我们，调 <code>GET /v1/monitors</code> 就行。每个监控点会返回：</p>
+      <p><code>last_checked_at</code>（上次检查时间）·
+      <code>last_check_ok</code>（上次是否成功）·
+      <code>last_error</code>（失败原因，成功时为 <code>null</code>）·
+      <code>next_check_at</code>（下次检查时间）</p>
+      <p><code>last_check_ok</code> 为 <code>true</code> 且 <code>last_error</code> 为
+      <code>null</code>，就说明最近一次检查成功了。如果 <code>last_error</code> 有值，
+      里面是可直接照着排查的原因（比如「不是有效的 RSS/Atom 结构」）。</p>
     </details>
     <details>
       <summary>能监控哪些地址？会不会被用来扫内网？</summary>

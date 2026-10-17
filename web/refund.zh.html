@@ -131,10 +131,12 @@ footer{border-top:1px solid var(--border);padding:24px 0;color:var(--text-3);fon
   </ul>
 
   <h2>有一件事需要你提前知道</h2>
-  <p><strong>监控点目前存在内存里，服务重启就会清空。</strong>
-     这意味着计费周期内如果发生重启，你配置的监控点会丢失 ——
-     这种情况我们会按比例退款，但<strong>提前知道比事后才发现好</strong>。</p>
-  <p>持久化存储在下一个版本。</p>
+  <p><strong>你的监控点存在服务器磁盘上</strong>，服务重启、升级、打补丁都不会丢 ——
+     不会因为我们发了个补丁就把你的监控点弄没了。</p>
+  <p>如果监控点确实停止工作了，那是我们这边的真实故障而不是重启导致：
+     告诉我们，我们会修复或按比例退款。想确认某个监控点当前是否正常，
+     调 <code>GET /v1/monitors</code> 看 <code>last_check_ok</code> 和
+     <code>last_error</code> 就行，不需要提供账号信息或邮箱。</p>
 
   <h2>政策变更</h2>
   <p>任何变更都会在本页更新并标注日期。<strong>不会追溯适用</strong>到你已付费的周期。</p>

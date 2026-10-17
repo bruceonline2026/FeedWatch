@@ -379,8 +379,28 @@ footer{padding:34px 0;font-size:13px;color:var(--text-3)}
       </div>
       <div class="fc">
         <h4>Do you store my data?</h4>
-        <p>Only a hash of each API key — plaintext is shown once at creation and never
-            written to disk. Feed bodies are processed in memory and discarded.</p>
+        <p>Your API key is stored only as a SHA-256 hash &mdash; plaintext is shown once at
+            creation and never written anywhere.</p>
+        <p><b>We do keep a plaintext copy of feed entries</b> (title, body, link, author,
+            category) on our server's disk. That is required by the capability you are
+            paying for: to tell you &ldquo;the title went from A to B&rdquo;, both A and B
+            have to exist on disk.</p>
+        <p>That data is kept <b>for as long as the monitor exists &mdash; delete the monitor and
+            it is deleted with it</b>. We do not analyse, resell or share it, we do not profile
+            you, and we do not link data across customers. Push notifications contain only
+            hashes and lengths, never full entry text. Full field list:
+            <a href="/v1/data-handling"><code>GET /v1/data-handling</code></a> (public) or the
+            <a href="/privacy">Privacy Policy</a>.</p>
+      </div>
+      <div class="fc">
+        <h4>How do I confirm the service is actually working?</h4>
+        <p>No need to contact us &mdash; call <code>GET /v1/monitors</code>. Each monitor returns
+            <code>last_checked_at</code>, <code>last_check_ok</code>,
+            <code>last_error</code> and <code>next_check_at</code>.</p>
+        <p>If <code>last_check_ok</code> is <code>true</code> and <code>last_error</code> is
+            <code>null</code>, the most recent check succeeded. If <code>last_error</code> has a
+            value, it is a directly actionable reason (for example &ldquo;not a valid RSS/RDF
+            structure&rdquo;).</p>
       </div>
       <div class="fc">
         <h4>Is $29 the final price?</h4>
@@ -395,8 +415,8 @@ footer{padding:34px 0;font-size:13px;color:var(--text-3)}
       </div>
       <div class="fc">
         <h4>What are the current limits?</h4>
-        <p>Monitors are held in memory during the validation stage, so a restart clears them.
-            Persistence arrives later.</p>
+        <p>Free tier:5 monitors, one check every 6 hours. Your monitors are stored on
+            our server's disk, so they survive restarts, upgrades and patches.</p>
       </div>
     </div>
   </div>

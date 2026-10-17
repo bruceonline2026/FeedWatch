@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>隐私政策 — FeedWatch</title>
-<meta name="description" content="FeedWatch 隐私政策：API Key 仅以 SHA-256 哈希存储、绝不保存明文；Feed 内容仅在内存中处理、从不落盘。">
+<meta name="description" content="FeedWatch 隐私政策：API Key 仅以 SHA-256 哈希存储、绝不保存明文；为字段级比对，feed 条目标题与正文的明文副本存于服务器磁盘；不分析、不转卖、不共享。完整清单见 api.tiici.com/v1/data-handling。">
 <link rel="canonical" href="https://api.tiici.com/zh/privacy">
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
@@ -68,23 +68,35 @@ footer{border-top:1px solid var(--border);padding:24px 0;color:var(--text-3);fon
 <main>
 <div class="wrap">
   <h1>隐私政策</h1>
-  <p class="lede">简短版：API Key 只存哈希，Feed 内容在内存中处理、从不落盘，我们不出售也不与任何人共享你的数据。</p>
-  <p class="updated">最后更新：2026-10-16</p>
+  <p class="lede">简短版：API Key 只存哈希，从不存明文。为了告诉你「哪个字段、从什么变成什么」，我们会在服务器磁盘上保留 feed 条目的明文副本用于比对—— 这是这个能力的必要条件。我们不出售、不与任何人共享、不做画像、不做跨客户关联。</p>
+  <p class="updated">最后更新：2026-10-17</p>
 
   <div class="callout">
-    <p><strong>我们实际保留什么：</strong>API Key 的 SHA-256 哈希、你提供的监控点URL、你的套餐等级、以及抓取失败时的错误信息。<strong>全部在服务器内存中。</strong></p>
+    <p><strong>我们实际保留什么：</strong>你的 API Key 的 SHA-256 哈希、你提供的监控点 URL 与名称、你监控的 feed 条目标题与正文（明文）、错误信息，以及你申请 Key 时使用的邮箱域名。<strong>除 API Key 明文外，这些都存放在服务器磁盘上</strong>，文件权限仅服务进程可读。</p>
+    <p><strong>完整、机器可读的清单：<a href="/v1/data-handling"><code>GET /v1/data-handling</code></a></strong>（公开、无需鉴权）。该端点由自动化测试与实际落盘字段双向核对；<strong>本页与该端点如有不一致，以端点为准</strong>并会修正本页。</p>
   </div>
 
-  <h2>存什么、存多久</h2>
+  <h2 id="store">存什么、存多久</h2>
   <table>
     <tr><th>数据</th><th>形式</th><th>保留时长</th></tr>
-    <tr><td>API Key</td><td><strong>仅 SHA-256 哈希</strong> —— 明文只在创建时显示一次，此后再不写入任何地方</td><td>直到你删除该 Key，或服务重启</td></tr>
-    <tr><td>监控点 URL</td><td>明文，存于内存</td><td>直到你删除该监控点</td></tr>
-    <tr><td>Feed 内容</td><td><strong>从不存储</strong> —— 内存中解析、比对后立即丢弃</td><td>数秒</td></tr>
-    <tr><td>检出的变更</td><td>投递到你的 webhook 后即丢弃</td><td>数秒</td></tr>
-    <tr><td>错误信息</td><td>明文，存于内存（如「上游返回 HTTP 403」）</td><td>直到下次成功检查</td></tr>
+    <tr><td>API Key</td><td><strong>仅 SHA-256 哈希</strong> —— 明文只在创建时显示一次，此后不写入任何地方</td><td>直到你吊销该 Key（需联系我们）</td></tr>
+    <tr><td>监控点 URL 与名称</td><td>明文，存于磁盘（服务重启后保留）</td><td>直到你删除该监控点</td></tr>
+    <tr><td><strong>Feed 条目内容</strong><br>（标题 / 正文 / 链接 / 作者 / 分类 / 发布时间）</td><td><strong>明文副本，存于磁盘</strong> —— 用于计算字段级差异。每轮检查覆盖一次</td><td>随监控点保留，删除监控点时一并删除</td></tr>
+    <tr><td>你申请 Key 时的邮箱<strong>域名</strong></td><td>明文，存于磁盘（仅域名，如 <code>example.com</code>）</td><td>长期</td></tr>
+    <tr><td>检出的变更</td><td>推送给你时只发哈希与长度，<strong>不发正文全文</strong></td><td>不额外留存</td></tr>
+    <tr><td>错误信息</td><td>明文，存于磁盘（如「上游返回 HTTP 403」）</td><td>直到下次成功检查</td></tr>
+    <tr><td>Webhook 配置</td><td>地址存于磁盘；<strong>HMAC 签名密钥只存哈希，不存明文</strong></td><td>随监控点保留</td></tr>
     <tr><td>服务器访问日志</td><td>请求路径、状态码、IP、时间戳 —— <strong>不含请求体</strong></td><td>按主机配置</td></tr>
   </table>
+
+  <div class="note">
+    <p><strong>为什么 feed 条目要存明文副本？</strong>因为我们承诺的核心能力是
+    「告诉你<em>哪个字段</em>从什么变成了什么」，而不是只说「有更新」。
+    要输出「标题从 A 变成了 B」，磁盘上必须同时存在 A 和 B。
+    如果只存哈希，哈希不可逆，我们只能告诉你「变了」，无法告诉你变成了什么——
+    那就退化成了各家监控工具都有的「这页变了」提示器，也就不再是我们在卖的东西。</p>
+    <p>这些内容本身是公开的订阅源，地址是你给我们的。<strong>我们缓存它只是为了给你算差异。</strong></p>
+  </div>
 
   <h2>我们额外记录了什么（计数，不含你的数据）</h2>
 
@@ -100,40 +112,68 @@ footer{border-top:1px solid var(--border);padding:24px 0;color:var(--text-3);fon
   </table>
 
   <div class="callout">
-    <p><strong>这些记录里<em>没有</em>：</strong></p>
+    <p><strong>这些<em>统计记录</em>里<em>没有</em>：</strong></p>
     <p>· 你的监控点 URL<br>
        · feed 标题 / 正文 / 作者<br>
        · 检出的变更内容<br>
        · 你的邮箱地址<br>
        · API Key（明文或哈希）<br>
-       · 请求头、浏览器指纹、来源 IP</p>
+       · 请求头、浏览器指纹、来源IP</p>
     <p>也就是说：<strong>我们知道「有 3 个人卡在了上限上」，
        但不知道那 3 个人是谁、监控的是什么网站。</strong></p>
+    <p style="margin-top:10px"><strong>请注意区分</strong>：上面这张表讲的是
+       <em>运营统计日志</em>（<code>events-*.jsonl</code>），它确实只有聚合计数。
+       但你的监控点与 feed 内容<strong>确实存放在磁盘上</strong>——
+       见上面<a href="#store">「存什么、存多久」</a>那一张表。这两件事不冲突：
+       统计日志不记录你的数据，但服务本身为了给你算差异而缓存了你的数据。</p>
   </div>
 
   <h3>为什么值得说明</h3>
   <p>市面上的监控工具普遍会埋第三方追踪器。我们不用 ——
      所以这个「我们额外记了什么」的清单，<strong>就是全部内容</strong>，
-     没有藏在别处的第二套统计。你可以要求我们删掉你的记录。</p>
+     没有藏在别处的第二套统计。</p>
 
   <h2>三点值得单独说明</h2>
 
   <h3>你的 API Key 从不以明文存储</h3>
   <p>创建 Key 时，响应里会包含它<strong>，且仅此一次</strong>。
      之后我们只保存 <code>SHA-256(key)</code> 并据此比对。
-     <strong>即使有人获得服务器内存的完整读取权限，也无法从我们持有的数据反推出你的 Key。</strong></p>
+     <strong>即使有人获得我们服务器数据文件的完整读取权限，也无法从我们持有的数据反推出你的 Key 明文。</strong></p>
   <p>代价也要说清楚：<strong>我们无法帮你找回丢失的 Key</strong>，
      也不会把它再发一封邮件给你。丢了就重新创建一把。</p>
 
-  <h3>Feed 内容不落盘</h3>
-  <p>抓取时，响应体在内存中解析、与上一轮快照比对，然后丢弃。
-     <strong>没有数据库、没有文件、没有缓存</strong> ——
-     我们不会在暗中构建互联网的影子副本。</p>
+  <h3>我们缓存了什么、为什么，以及我们不做什么</h3>
+  <p>为了提供「字段级变更」——也就是告诉你标题从 A 变成了 B，而不只是「有更新」——
+     我们必须在磁盘上保留上一次的 feed 内容用于对比。
+     <strong>这是这个能力的必要条件，不是我们的选择。</strong></p>
+  <p><strong>我们不做什么：</strong></p>
+  <ul>
+    <li>不分析、不转卖、不与任何人共享这些内容</li>
+    <li>不做用户画像，<strong>不做跨客户关联</strong></li>
+    <li>推送给你时只发哈希与长度，<strong>不发正文全文</strong></li>
+    <li>不使用广告网络、分析追踪器或第三方数据 broker</li>
+  </ul>
+  <p>这些内容本身是公开的订阅源，地址是你给我们的。<strong>我们缓存它只是为了给你算差异。</strong></p>
 
-  <h3>监控点不扛重启 —— 这有两面性</h3>
-  <p>因为一切都在内存中，<strong>服务重启会清空所有监控点与 Key</strong>。
-     这对隐私是好事，对可靠性是坏事。持久化存储在下一版本；
-     到时会先通知你，再变更本政策。</p>
+  <h3>保留多久、怎么删</h3>
+  <p>你的数据<strong>随监控点一直保留</strong>，期间每轮检查覆盖一次基线。
+     删除监控点时，其对应的 feed 内容<strong>会一并删除</strong>。</p>
+  <p>你可以随时自己做到：</p>
+  <ul>
+    <li><strong>查看服务是否在正常工作</strong> —— 调 <code>GET /v1/monitors</code>，
+        每个监控点都会返回 <code>last_checked_at</code>、<code>last_check_ok</code>、
+        <code>last_error</code>、<code>next_check_at</code>。
+        <code>last_check_ok</code> 为 <code>true</code> 且 <code>last_error</code> 为
+        <code>null</code>，就说明最近一次检查成功了。</li>
+    <li><strong>删除某个监控点及其缓存的 feed 内容</strong> ——
+        <code>DELETE /v1/monitors/{id}</code></li>
+  </ul>
+  <p>⚠️ <strong>需要人工处理的两件事，我们不假装能自助：</strong></p>
+  <ul>
+    <li><strong>吊销一把 Key</strong> —— 目前没有自助端点，请发邮件给我们。</li>
+    <li><strong>删除你的全部账号数据</strong>（包括 API Key 哈希与邮箱域名）——
+        目前只能由我们人工执行，请发邮件给我们，我们会在 1 个工作日内处理。</li>
+  </ul>
 
   <h2>会传给第三方什么</h2>
   <table>
@@ -160,12 +200,17 @@ footer{border-top:1px solid var(--border);padding:24px 0;color:var(--text-3);fon
   <h2>你的权利</h2>
   <p>你可以随时：</p>
   <ul>
-    <li>删除你创建的任何监控点</li>
-    <li>询问我们持有你哪些数据 —— <strong>答案会很短，因为确实没多少</strong></li>
-    <li>要求删除你的账号数据</li>
+    <li><strong>自助删除</strong>你创建的任何监控点（<code>DELETE /v1/monitors/{id}</code>）——
+        其缓存的 feed 内容会一并删除</li>
+    <li><strong>自助查看服务状态</strong>（<code>GET /v1/monitors</code>）——
+        每个监控点的上次检查时间、是否成功、错误信息</li>
+    <li><strong>查询我们持有你哪些数据</strong> ——
+        <code>GET /v1/data-handling</code> 列出全部字段名，你也可以发邮件问我们具体内容</li>
+    <li>要求删除你的账号数据 —— <strong>这一项目前需要人工处理</strong>，见上节</li>
   </ul>
-  <p>由于一切在内存中、没有数据库，删除账号实质上就是「重启 + 让你的 Key 失效」。
-     你提出请求后我们会为你执行。</p>
+  <p>⚠️ <strong>我们如实说明当前能力的边界：</strong>目前没有「一键删除全部数据」的自助端点，
+     也没有自助吊销 Key 的端点。这两项都需要发邮件由我们人工执行。
+     我们把它写在这里，而不是让你以为点一下就能删干净。</p>
 
   <h2>未成年人</h2>
   <p>FeedWatch 是开发者工具，不面向 16 岁以下人群，我们不故意收集未成年人信息。</p>

@@ -142,11 +142,14 @@ footer{border-top:1px solid var(--border);padding:24px 0;color:var(--text-3);fon
   </ul>
 
   <h2>One thing you should know up front</h2>
-  <p><strong>Monitors are currently held in memory</strong>, so restarting the service
-     clears them. That means a restart during your billing period can cost you the
-     monitors you configured — we will pro-rate a refund if that happens, but it is
-     better to know now than after you have built something around a monitor.</p>
-  <p>Persistent storage is on the roadmap for the next version.</p>
+  <p><strong>Your monitors are stored on our server's disk</strong>, so they survive
+     server restarts, upgrades and patches &mdash; you will not lose a monitor because
+     we shipped a fix.</p>
+  <p>If a monitor does stop working, that is a genuine failure on our side rather than a
+     restart: tell us and we will fix it or pro-rate a refund. The honest way to check
+     whether a monitor is currently working is to call <code>GET /v1/monitors</code> and
+     look at <code>last_check_ok</code> and <code>last_error</code> &mdash; no account
+     details or email required.</p>
 
   <h2>Changes to this policy</h2>
   <p>Any change will be posted on this page with an updated date. We will not
