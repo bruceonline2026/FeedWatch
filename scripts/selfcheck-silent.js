@@ -171,6 +171,53 @@ console.log('\n\x1b[1m模式 ② 只声明不强制\x1b[0m \x1b[90m（声明 A�
   check('只声明', '代码块 pre 自带背景色（不依赖外层类）',
     preHasBg,
     'pre 无 background → 若外层包装类未定义，浅色代码文字落在浅色底上，整块不可读');
+
+  // ②-g  付费档的「价格 / 周期 / 配额」必须三处口径一致
+  //
+  // 实测教训（2026-10-17）：徐总指出两个档位的单位不一致 ——
+  // 免费写 `$0 /mo`、付费写 `$29 /12 months`，视觉上像两个不同维度。
+  // 且当时 `/12 months` 这个改法**只改了页面**，
+  // 而 Payoneer 后台里那条链接的名称还写着 `$29/month`（客户付款时能看到）。
+  //
+  // 这就是「只声明不强制」的第五种形态：
+  //   同一个承诺（$29 覆盖 12 个月）分散在三个地方，
+  //   改了一处，另两处静默停留在旧口径 —— 客户会以为看错了价格。
+  //
+  // 检查：两版页面的价格单位必须都是「周期」而非「月」，
+  // 且页面上的 25 monitors 必须与代码默认配额口径一致。
+  const unitProblems = [];
+  for (const f of ['web/zh.html', 'web/en.html']) {
+    let page = '';
+    try { page = readFileSync(join(ROOT, f), 'utf8'); } catch { continue; }
+    const sec = page.slice(page.indexOf('<section id="pricing">'));
+    // 免费档：单位不能是 /mo（0 元谈「每月」无意义且与付费档不同维度）
+    if (/<div class="price">\$0<span>\s*\/mo/.test(sec))
+      unitProblems.push(`${f} 免费档写「$0 /mo」→ 应改为「永久免费 / forever」，与付费档同维度`);
+    // 付费档：必须写明周期
+    if (!/\$29<span>\s*\/12\s*(months|个月)/.test(sec))
+      unitProblems.push(`${f} 付费档未写「$29 /12 months」`);
+    // Pro 档配额数字必须与手册里给徐总的建链接文案一致（25）
+    const proSec = sec.slice(sec.indexOf('plan hot'));
+    if (!/25\s*(个监控点|monitors)/.test(proSec))
+      unitProblems.push(`${f} Pro 档未写 25 monitors —— 与 Payoneer 链接描述不一致`);
+    // hourly 与 15-minute 不应拆成两条（代码里是 900/3600 二选一）
+    if (/Checked every hour<\/li>[\s\S]{0,400}?15-minute checks/.test(proSec))
+      unitProblems.push(`${f} 把 hourly 与 15-minute 拆成两条 —— 代码里是二选一，不是叠加`);
+  }
+  // 手册里必须留有可直接复制的描述文案（含 25 monitors / hourly checks）
+  try {
+    const manual = readFileSync(
+      join(ROOT, 'docs/运营手册/更换收款链接操作手册.md'), 'utf8',
+    );
+    if (!/FeedWatch Pro subscription\.\s*25 monitors, hourly checks/.test(manual))
+      unitProblems.push('更换收款链接手册里缺少实测可用的描述文案（否则下次建链接要重新试）');
+  } catch { /* 手册不存在则跳过 */ }
+
+  check('只声明', '付费档的价格单位与配额三处口径一致',
+    unitProblems.length === 0,
+    unitProblems.length
+      ? unitProblems.join('；')
+      : '两版页面 + 手册描述文案一致');
 }
 
 // ══════════════════════════════════════════════════════════════

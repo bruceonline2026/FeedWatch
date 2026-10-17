@@ -131,6 +131,7 @@ pre .f{color:#7c7b74}
 .plan ul{list-style:none;font-size:13px;margin-bottom:20px;flex:1}
 .plan li{padding:5px 0;color:var(--text-2);display:flex;gap:7px;align-items:flex-start;line-height:1.5}
 .plan li svg{width:14px;height:14px;stroke:var(--ok);stroke-width:2.4;fill:none;flex:none;margin-top:3px}
+.plan li em{font-style:normal;color:var(--text-3)}
 .plan li.off{color:var(--text-3)}
 .plan li.off svg{stroke:var(--text-3);opacity:.4}
 .note{margin-top:20px;font-size:13px;color:var(--text-2);padding:14px 16px;background:var(--surface-2);border-radius:9px;border:1px solid var(--border)}
@@ -326,7 +327,7 @@ footer{padding:34px 0;font-size:13px;color:var(--text-3)}
     <p class="sub">Try the free tier until you hit the ceiling, then decide.</p>
     <div class="pg2">
       <div class="plan">
-        <div class="price">$0<span> /mo</span></div>
+        <div class="price">$0<span> forever</span></div>
         <div class="desc">Trials and personal projects</div>
         <ul>
           <li><svg viewBox="0 0 24 24"><path d="M5 12l5 5L20 7"/></svg>5 monitors</li>
@@ -342,8 +343,7 @@ footer{padding:34px 0;font-size:13px;color:var(--text-3)}
         <div class="desc">For production and higher frequency</div>
         <ul>
           <li><svg viewBox="0 0 24 24"><path d="M5 12l5 5L20 7"/></svg>25 monitors</li>
-          <li><svg viewBox="0 0 24 24"><path d="M5 12l5 5L20 7"/></svg>Checked every hour</li>
-          <li><svg viewBox="0 0 24 24"><path d="M5 12l5 5L20 7"/></svg>15-minute checks</li>
+          <li><svg viewBox="0 0 24 24"><path d="M5 12l5 5L20 7"/></svg>Checked hourly <em>or every 15 minutes</em></li>
           <li><svg viewBox="0 0 24 24"><path d="M5 12l5 5L20 7"/></svg>Keyword filtering</li>
           <li><svg viewBox="0 0 24 24"><path d="M5 12l5 5L20 7"/></svg>Field-level diffs</li>
           <li><svg viewBox="0 0 24 24"><path d="M5 12l5 5L20 7"/></svg>Priority support</li>
@@ -354,8 +354,8 @@ footer{padding:34px 0;font-size:13px;color:var(--text-3)}
     <p class="sub" style="margin-top:18px">
       Exceeding the free monitor limit returns <code>429</code> with an upgrade hint.
       <strong>Existing monitors keep running</strong> — the limit only blocks creating new ones.
-      The $29 covers all payment fees and runs for 12 months; when it expires we will
-      send you a renewal link — nothing is charged automatically.
+      The <strong>$29 covers all payment fees</strong> and runs for <strong>12 months</strong>;
+      when it expires we will send you a renewal link — nothing is charged automatically.
       See the <a href="/refund">refund policy</a>.
     </p>
   </div>

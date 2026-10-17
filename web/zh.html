@@ -128,6 +128,7 @@ pre .f{color:#7c7b74}
 .plan ul{list-style:none;font-size:13px;margin-bottom:20px;flex:1}
 .plan li{padding:5px 0;color:var(--text-2);display:flex;gap:7px;align-items:flex-start;line-height:1.5}
 .plan li svg{width:14px;height:14px;stroke:var(--ok);stroke-width:2.4;fill:none;flex:none;margin-top:3px}
+.plan li em{font-style:normal;color:var(--text-3)}
 .plan li.off{color:var(--text-3)}
 .plan li.off svg{stroke:var(--text-3);opacity:.4}
 .note{margin-top:20px;font-size:13px;color:var(--text-2);padding:14px 16px;background:var(--surface-2);border-radius:9px;border:1px solid var(--border)}
@@ -406,7 +407,7 @@ check_feed(url)                                        <span class="c">立即检
     <p class="sub">先用免费层撞到上限，再决定要不要升级。</p>
     <div class="pg2">
       <div class="plan">
-        <div class="price">$0<span> /月</span></div>
+        <div class="price">$0<span> 永久免费</span></div>
         <div class="desc">试用与个人项目</div>
         <ul>
           <li><svg viewBox="0 0 24 24"><path d="M5 12l5 5L20 7"/></svg>5 个监控点</li>
@@ -422,8 +423,7 @@ check_feed(url)                                        <span class="c">立即检
         <div class="desc">生产环境与更高频</div>
         <ul>
           <li><svg viewBox="0 0 24 24"><path d="M5 12l5 5L20 7"/></svg>25 个监控点</li>
-          <li><svg viewBox="0 0 24 24"><path d="M5 12l5 5L20 7"/></svg>1 小时检查一次</li>
-          <li><svg viewBox="0 0 24 24"><path d="M5 12l5 5L20 7"/></svg>15 分钟检查一次</li>
+          <li><svg viewBox="0 0 24 24"><path d="M5 12l5 5L20 7"/></svg>1 小时检查一次<em>，或每 15 分钟</em></li>
           <li><svg viewBox="0 0 24 24"><path d="M5 12l5 5L20 7"/></svg>关键词过滤</li>
           <li><svg viewBox="0 0 24 24"><path d="M5 12l5 5L20 7"/></svg>字段级 diff</li>
           <li><svg viewBox="0 0 24 24"><path d="M5 12l5 5L20 7"/></svg>优先支持</li>
@@ -432,9 +432,9 @@ check_feed(url)                                        <span class="c">立即检
       </div>
     </div>
     <p class="sub" style="margin-top:18px">
-      免费层监控点超限会返回 <code>429</code> 并给出升级提示，
+      免费层监控点超限会返回 <code>429</code>并给出升级提示，
       <strong>已有监控点继续运行</strong> —— 限制只挡住新建。
-      $29 已含全部支付手续费，<strong>一次付清可用 12 个月</strong>；
+      <strong>$29 已含全部支付手续费</strong>，<strong>一次付清可用 12 个月</strong>；
       到期前我们会发续费链接给你，<strong>不会自动扣费</strong>。
       详见 <a href="/zh/refund">退款政策</a>。
     </p>
