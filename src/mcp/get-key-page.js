@@ -55,7 +55,7 @@ export function getKeyPage({ email = null, issued = null, error = null, remainin
   if (issued) {
     body = `<div class="card ok">
   <h2>Your API key is ready</h2>
-  <p class="warn">Copy it now — for security we cannot show it again.</p>
+  <p class="warn">Copy it now — we do not email it, and we cannot show it to you again.</p>
   <div class="keybox"><code id="k">${esc(issued.key)}</code><button id="cp" type="button">Copy</button></div>
   <p class="meta">Label: <code>${esc(issued.label)}</code></p>
   <h3>Connect it</h3>
@@ -63,6 +63,10 @@ export function getKeyPage({ email = null, issued = null, error = null, remainin
   <p class="meta">Works with Claude, Cursor, VS Code, Windsurf, Zed and Replit.
      Or call the REST API directly — see
      <a href="https://api.tiici.com/">api.tiici.com</a>.</p>
+  <p class="meta">You can check whether your monitors are running at any time:
+     <code>GET /v1/monitors</code> with your key returns
+     <code>last_check_ok</code>, <code>last_error</code> and <code>last_checked_at</code>
+     for each one.</p>
   <p class="meta"><strong>Keep this key private.</strong> Anyone with it can use your quota.
      If it leaks, email <a href="mailto:bruceonline2018@gmail.com">bruceonline2018@gmail.com</a>
      and we will rotate it.</p>
@@ -80,10 +84,12 @@ export function getKeyPage({ email = null, issued = null, error = null, remainin
   <h2>Get your free API key</h2>
   <p class="lede">No account, no password, no card. One key, 5 monitors, free.</p>
   <form method="POST" action="/get-key">
-    <label for="email">Where should we send your key?</label>
+    <label for="email">Your email address</label>
     <input id="email" name="email" type="email" required autocomplete="email"
            placeholder="you@example.com" value="${esc(email ?? '')}">
-    <p class="meta">We use it to send your key and nothing else — no newsletter, no tracking.
+    <p class="meta">Your key appears on the next screen — <b>we do not email it</b>.<br>
+       We store only the <b>domain part</b> of your address (e.g. <code>example.com</code>),
+       so we can contact you if something breaks. No newsletter, no tracking.
        See the <a href="/privacy">privacy policy</a>.</p>
     <button class="btn" type="submit">Create my key</button>
   </form>
