@@ -30,7 +30,7 @@
  * 而内存数据重启即清空 —— 不落盘等于这个信号不存在。
  */
 
-import { appendFileSync, mkdirSync, existsSync, readFileSync, readdirSync } from 'node:fs';
+import { appendFileSync, mkdirSync, existsSync, readFileSync, readdirSync, chmodSync } from 'node:fs';
 import { join } from 'node:path';
 
 const DATA_DIR = process.env.FEEDWATCH_DATA_DIR ?? '/opt/feedwatch/data';
@@ -77,9 +77,16 @@ export function track(event, data = {}) {
   };
 
   try {
-    if (!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true });
+    if (!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
+    // ⚠️ 目录权限：统计日志虽只含聚合计数（无 URL / feed 内容 / 邮箱），
+    //   但它记录了「哪个 key id 在什么时候撞了哪个限流」，属于运营敏感数据。
+    //   appendFileSync 的 mode 参数**只在文件被创建时生效** ——
+    //   已存在的文件保留旧权限，所以下面显式 chmod 一次（幂等）。
     const day = row.ts.slice(0, 10);
-    appendFileSync(join(DATA_DIR, `events-${day}.jsonl`), `${JSON.stringify(row)}\n`, 'utf8');
+    const file = join(DATA_DIR, `events-${day}.jsonl`);
+    appendFileSync(file, `${JSON.stringify(row)}\n`, { encoding: 'utf8', mode: 0o600 });
+    try { chmodSync(DATA_DIR, 0o700); } catch { /* 无权限时由部署流程保证 */ }
+    try { chmodSync(file, 0o600); } catch { /* 同上 */ }
   } catch (e) {
     // ⚠️ 写盘失败必须**可见** —— 否则就是「声称在记录，实际什么都没记」，
     //   那正是今天反复修的那类缺陷。实测踩到过：目录权限不足时静默跳过，

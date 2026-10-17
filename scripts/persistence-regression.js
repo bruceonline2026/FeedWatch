@@ -303,6 +303,115 @@ await t('重启后基线可用于字段级 diff（不是只判断有无变化）
   return `title「${t.old}」→「${t.new}」（落盘保留了 diff 所需的旧值）`;
 });
 
+await t('★ webhook HMAC 密钥绝不明文落盘（泄露=可伪造告警）', async () => {
+  // 这是比title 泄露严重得多的问题：
+  //   `channels[].__secret` 是 webhook 的 **HMAC 签名密钥**
+  //   （见 src/notify/deliver.js 的 signPayload(rawBody, secret)）。
+  //   它明文落盘意味着：**拿到数据文件的人可以伪造任意一条告警**，
+  //   让客户以为是真变更 —— 那是**完整性**问题，不只是隐私问题。
+  //
+  // ⚠️ 序列化处必须过滤，而不能只在 updateMonitor 里过滤 ——
+  //   后者依赖「所有写入路径都记得处理」，而 restore() 会把历史数据读回来。
+  const SECRET = 'super-secret-hmac-key-abc123';
+  const { PersistentStore } = await import('../src/persistence.js');
+  const { MemoryStore } = await import('../src/service.js');
+  const f = join(DIR, 'secret-check.json');
+
+  const s = new MemoryStore({ persistence: new PersistentStore(f) });
+  const mon = s.createMonitor({ url: 'https://x.com/feed' });
+  s.updateMonitor(mon.id, {
+    channels: [{ url: 'https://hook.example/x', __secret: SECRET }],
+  });
+  s.persistNow();
+
+  const raw = readFileSync(f, 'utf8');
+  assert(!raw.includes(SECRET),
+    '落盘文件里绝不能出现 webhook HMAC 密钥明文 —— 泄露即可伪造告警');
+  assert(!/"__secret":/.test(raw),
+    '落盘文件里不应保留 __secret 字段本身');
+  // 内存里仍需保留明文，否则 HMAC 签名无法工作
+  assert(s.getMonitor(mon.id).channels[0].__secret === SECRET,
+    '内存中必须保留明文 secret，否则无法签名 webhook');
+
+  // ★ 结构保证：即使内存里被绕过（比如从旧文件restore 进来）
+  //   serialize() 也会剥掉 —— 这是最后一道防线
+  const s2 = new MemoryStore({ persistence: new PersistentStore(f) });
+  s2.restore(new PersistentStore(f).load());
+  s2.getMonitor(mon.id).channels = [{ url: 'https://hook.example/x', __secret: SECRET }];
+  const serialized = JSON.stringify(s2.serialize());
+  assert(!serialized.includes(SECRET), 'serialize() 必须是最后一道防线，不能漏');
+  return '明文不入盘、内存中可用、序列化兜底';
+});
+
+await t('★ /v1/data-handling 与实际落盘字段一致（防六处文案静默过期）', async () => {
+  // 此前「客户数据存在哪里」散落在六处独立文本（隐私政策中/英、落地页中/英、
+  // 退款政策中/英），各自会独立过期 —— 加持久化后**六处全部变成错误陈述**，
+  // 且没有任何一处会因代码变化而自动报警。
+  //
+  // 这个断言让 `/v1/data-handling` 成为**唯一真源**：
+  // 新增落盘字段时端点会先红，文案就不会静默过期。
+  const { PersistentStore } = await import('../src/persistence.js');
+  const { MemoryStore, MonitorService } = await import('../src/service.js');
+
+  const h = await boot(3199);
+  let payload;
+  try {
+    const r = await fetch('http://127.0.0.1:3199/v1/data-handling');
+    assert(r.status === 200, `端点应可公开访问（无需 Key），实际 ${r.status}`);
+    payload = await r.json();
+  } finally { await stop(h); }
+
+  assert(payload.never_stored && payload.in_memory_only,
+    '端点应同时声明 never_stored 与 in_memory_only —— 只说「存什么」不说「不存什么」是话术');
+  assert(payload.never_stored.includes('api_key_plaintext'),
+    'never_stored 必须含 api_key_plaintext');
+  // ⚠️ 这条是本轮最重要的加强：HMAC 密钥泄露 = 可伪造告警（完整性问题）
+  assert(payload.never_stored.includes('webhook_hmac_secret'),
+    'never_stored 必须含 webhook_hmac_secret —— 泄露即可伪造告警');
+
+  // ★ 关键断言：实际落盘的监控点字段必须被端点覆盖
+  const store = new MemoryStore({ persistence: null });
+  const mon = store.createMonitor({ url: 'https://x.com/feed', name: 'N', keywords: ['k'] });
+  // ⚠️ 必须覆盖「经历过一次检查」的状态 —— 像 `lastFormat` 只在检查成功后才写入。
+  //   这里直接赋值而非真调checkMonitor：单元层面没有 fixture 可用
+  //   （`FEEDWATCH_ALLOW_LOCAL_FETCH` 是模块加载时读的常量，
+  //   此时 import 已经发生，改环境变量无效 —— 这也是我实测踩到的）。
+  //   目的是取到**字段全集**，不是验证检查逻辑（那由 e2e 负责）。
+  mon.lastFormat = 'rss';
+  const declared = new Set(payload.on_disk['store.json'].monitors);
+  const actual = Object.keys(store.serialize().monitors[0]);
+  const undeclared = actual.filter((f) => !declared.has(f));
+
+  assert(undeclared.length === 0,
+    `这些监控点字段会落盘但 /v1/data-handling 没声明：${undeclared.join(', ')}`
+    + ' —— 端点与实际不一致 = 对外承诺会静默过期');
+
+  // 反向也查一遍：声明了但实际不存在，同样是漂移
+  const nonexistent = [...declared].filter((f) => !actual.includes(f) && !f.includes('.'));
+  assert(nonexistent.length === 0,
+    `端点声明了这些字段但实际不存在：${nonexistent.join(', ')}`
+    + `（监控点字段：${actual.join(', ')}）—— 同样是对外承诺与实现不符`);
+
+  return `${actual.length} 个实际字段全部已声明（双向核对）`;
+});
+
+await t('★ /v1/usage 不再声称「内存统计」（客户能直接读到这句话）', async () => {
+  const h = await boot(3290);
+  try {
+    const r = await fetch('http://127.0.0.1:3290/v1/usage', {
+      headers: { 'x-api-key': API_KEY },
+    });
+    assert(r.status === 200, `应 200，实际 ${r.status}`);
+    const j = await r.json();
+    assert(j.usage, '应有用法说明字段');
+    assert(!/内存统计|MVP 阶段/.test(j.usage),
+      `usage 字段仍声称内存统计，实际：${j.usage}`
+      + ' —— 这是客户在 API 响应里能直接读到的假陈述');
+    assert(/data-handling/.test(j.usage), `应指向唯一真源端点，实际：${j.usage}`);
+    return j.usage.slice(0, 60);
+  } finally { await stop(h); }
+});
+
 rmSync(DIR, { recursive: true, force: true });
 console.log(`\n═══ 结果：${pass} 项通过，${fail} 项失败 ═══\n`);
 process.exit(fail === 0 ? 0 : 1);

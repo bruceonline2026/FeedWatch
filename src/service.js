@@ -27,6 +27,11 @@ const MAX_FEED_BYTES = 10 * 1024 * 1024;
  */
 const EPHEMERAL_SNAPSHOT_PER_KEY = 20;
 
+/** 凭证哈希（webhook secret 等）：与 API Key 同样的处理原则 —— 落盘只存哈希 */
+function sha256Hex(s) {
+  return createHash('sha256').update(String(s), 'utf8').digest('hex');
+}
+
 /**
  * 持久化存储（2026-10-17 从纯内存改为落盘）
  *
@@ -63,7 +68,18 @@ export class MemoryStore {
   serialize() {
     return {
       apikeys: [...this.apikeys.values()],
-      monitors: [...this.monitors.values()],
+      // ★ 这里是最后一道防线：**无论 channel 从哪来，序列化时都剥掉明文 secret**
+      //
+      // 不能只在 updateMonitor 里处理 —— 那依赖「所有写入路径都记得过滤」，
+      // 而 restore() 会把历史数据（含明文 secret）重新读回内存。
+      // 序列化是唯一的收口点，在这里过滤才**结构上不可能漏**。
+      monitors: [...this.monitors.values()].map((m) => {
+        if (!Array.isArray(m.channels) || m.channels.length === 0) return m;
+        return {
+          ...m,
+          channels: m.channels.map(({ __secret, ...rest }) => rest),
+        };
+      }),
       // 快照只存比对所需的最小信息；items 的原始字段经 fromJSON 还原
       snapshots: [...this.snapshots.entries()].map(([id, s]) => ({
         id,
@@ -165,7 +181,18 @@ export class MemoryStore {
         m.lastError = null;
       }
     }
-    if (Array.isArray(patch.channels)) m.channels = patch.channels;
+    if (Array.isArray(patch.channels)) {
+      // ⚠️ **这里绝不能剥掉 __secret**（2026-10-17 我自己踩过一次）
+      //
+      // `__secret` 是 webhook 的 HMAC 密钥（见 src/notify/deliver.js 的
+      // `signPayload(rawBody, secret)`），**内存里必须有明文才能签名**。
+      // 我第一版在这里就把它替换成哈希，结果 webhook 当场失效 ——
+      // 落盘是安全的，但功能坏了。
+      //
+      // 正确做法：**内存留明文，只在 serialize() 时剥离**。
+      // serialize 是唯一的收口点 —— 不依赖「每条写入路径都记得过滤」。
+      m.channels = patch.channels.slice(0, 5).map((c) => ({ ...c }));
+    }
     this.persist();
     return m;
   }

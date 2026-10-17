@@ -615,6 +615,88 @@ const server = http.createServer(async (req, res) => {
     // ---------- 付款跳转 ----------
     // 放在鉴权区之前：这是公开的付费入口，任何访客都应能点到。
     // 链接内容来自服务器配置文件，不含任何凭据。
+    // ---------- 数据存储边界（公开，无需鉴权）----------
+    //
+    // ⚠️ 放在鉴权区之前是**刻意的**：这是**对外承诺**，任何访客（含未注册客户）
+    //   都有权知道自己给了我们的数据存在哪里。以前这个事实散落在六处独立文本里，
+    //   各自独立过期 —— 2026-10-17 加持久化后六处**全部**变成错误陈述。
+    //   收敛到这里 + e2e 断言它与实际落盘字段一致，才不会再静默漂移。
+    /**
+     * ★ GET /v1/data-handling —— 数据存储边界的**唯一真源**（2026-10-17）
+     *
+     * ── 为什么要这个端点 ──
+     * 此前「客户数据存在哪里」这一事实散落在**六处**独立文本里
+     * （隐私政策中/英、落地页中/英、退款政策中/英），各自会独立过期。
+     * 2026-10-17 加持久化功能后，六处**全部**变成了错误陈述 ——
+     * 没有任何一处会因代码变化而自动报警。
+     *
+     * 做法：把边界收敛成一份**机器可读**的定义放在这里，
+     * 由e2e 测试断言「这个列表」与「`MemoryStore.serialize()` 的实际字段」一致。
+     * 于是下次新增落盘字段时**这个端点会先变红**，六处文案就不会静默过期。
+     *
+     * ⚠️ `self_service_delete_all: false` 是刻意暴露的短板：
+     *   目前只能逐个删除监控点，没有「一键删除全部数据」。
+     *   主动说出来比被用户发现更可信。
+     */
+    if (path === '/v1/data-handling' && req.method === 'GET') {
+      return json(res, 200, {
+        updated: '2026-10-17',
+        summary: '监控点与快照存在服务器磁盘（重启/升级/补丁均不丢）；API Key 与 webhook HMAC 密钥只存哈希，从不存明文。',
+        in_memory_only: [
+          'check_feed_temporary_baseline', 'rate_limit_buckets',
+          'admin_session', 'payment_link_pool',
+        ],
+        on_disk: {
+          // ⚠️ 这里的标识符必须与 `MemoryStore.serialize()` 的**实际字段名**一致，
+          //   否则 e2e 断言会报「未声明」—— 那正是这个端点存在的意义：
+          //   新增落盘字段时先在这里变红，六处对外文案就不会静默过期。
+          //   （首版我写成了业务名 monitor_url / entry_title，
+          //     被测试当场抓出来：实际字段是 url / title。）
+          'store.json': {
+            // —— 监控点配置 ——
+            monitors: [
+              'id', 'url', 'name', 'intervalSeconds', 'keywords',
+              'apiKeyId', 'status', 'createdAt',
+              'lastCheckedAt', 'lastChangeAt', 'nextCheckAt',
+              'lastFormat', 'lastError', 'lastCheckOk', 'errorCount',
+              'trippedByCircuitBreaker',
+              // channels 数组本身也落盘（但**没有 __secret** —— HMAC 密钥不入盘，
+              // 见 MemoryStore.serialize() 里那道最后防线）
+              'channels', 'channels[].url', 'channels[].type',
+            ],
+            // —— 快照基线（字段级 diff 必须保留旧值才能报出「X 变成 Y」）——
+            snapshots: [
+              'url', 'format', 'feedTitle', 'fetchedAt', 'contentHash',
+              'items[].id', 'items[].title', 'items[].contentText', 'items[].link',
+              'items[].author', 'items[].category', 'items[].publishedAt',
+              'items[].contentHash',
+            ],
+            // —— 凭据与身份 ——
+            apikeys: ['id', 'hash', 'label', 'createdAt', 'parentId', 'isBootstrap'],
+          },
+          'events-YYYY-MM-DD.jsonl': [
+            // 聚合计数，不含 URL / feed 内容 / 邮箱
+            'ts', 'ev', 'k', 'c', 'r', 's',
+          ],
+        },
+        never_stored: [
+          'api_key_plaintext',
+          // ⚠️ HMAC 签名密钥 —— 泄露即可**伪造告警**，比 title 泄露严重得多
+          //   （那是完整性问题，不只是隐私问题）。见 MemoryStore.serialize()。
+          'webhook_hmac_secret',
+          'credit_card_info',
+        ],
+        file: { path: DATA_FILE, mode: '0600', dir_mode: '0700' },
+        retention: {
+          per_monitor: '随监控点存续；每次检查覆盖上一轮快照',
+          deletion: 'DELETE /v1/monitors/{id} 会一并删除该监控点的快照',
+          statistics: '运营统计日志无自动清理（仅含聚合计数）',
+        },
+        self_service_delete_all: false,
+        docs: `${PUBLIC_URL}/privacy`,
+      });
+    }
+
     if (path === '/pay') {
       const url = currentPayLink();
       if (!url) {
@@ -717,6 +799,7 @@ and we will send you a payment link within 1 business day.</p>
     const KNOWN = [
       /^\/v1\/apikeys$/,
       /^\/v1\/usage$/,
+      /^\/v1\/data-handling$/,
       /^\/v1\/monitors$/,
       /^\/v1\/monitors\/[^/]+$/,
       /^\/v1\/monitors\/[^/]+\/check$/,
@@ -1010,9 +1093,13 @@ track('api_429', { keyId: auth?.id ?? null, source: 'key_ratelimited_day' });
           frequency: FREE_INTERVALS.map((s) => `${s / 3600}h`),
           checks_per_day: Math.floor((86400 / MIN_INTERVAL) * MAX_MONITORS),
         },
-        usage: 'MVP 阶段为内存统计，生产环境将接入持久化',
+        // ⚠️ 原文是「MVP 阶段为内存统计，生产环境将接入持久化」——
+        //   那是2026-10-17 之前的**事实**，持久化已上线，这句话现在是**假的**，
+        //   而且客户能在 API 响应里直接读到。改为指向唯一的真源端点。
+        usage: `监控点统计取自磁盘持久化存储（重启不丢）；数据存储明细见 ${PUBLIC_URL}/v1/data-handling`,
       });
     }
+
 
     return err(res, 405, `不支持的方法：${req.method} ${path}`);
   } catch (e) {
