@@ -388,6 +388,36 @@ await t('★ /v1/data-handling 与实际落盘字段一致（防六处文案静�
 
   // 反向也查一遍：声明了但实际不存在，同样是漂移
   const nonexistent = [...declared].filter((f) => !actual.includes(f) && !f.includes('.'));
+
+  // ★★ 快照 items 的双向核对（2026-10-19 补）
+  // 上面只查了 monitors，**items[] 一直是盲区** ——
+  //   所以 parser 修复新增 `updated` 字段时，/v1/data-handling 没跟着改，
+  //   而测试不会红（它根本不查 items）。这就是「端点是唯一真源」失效的原因。
+  const { Snapshot } = await import('../src/diff/engine.js');
+  const mon2 = store.createMonitor({ url: 'https://x.com/feed2' });
+  store.saveSnapshot(mon2.id, new Snapshot('https://x.com/feed2', {
+    format: 'atom',
+    title: 'F',
+    items: [{
+      id: 'tag:e.com,2026:1',
+      title: '标题',
+      link: 'https://e.com/1',
+      publishedAt: '2026-10-01T00:00:00Z',
+      updated: '2026-10-15T09:30:00Z',   // ← parser 修复后确实会有
+      contentText: '正文',
+      contentHash: 'h1',
+      author: '作者',
+      category: '分类',
+    }],
+  }, new Date().toISOString()));
+
+  const declaredItems = new Set(payload.on_disk['store.json'].snapshots);
+  const actualItem = Object.keys(store.serialize().snapshots[0].json.items[0]);
+  const undeclaredItems = actualItem.map((f) => `items[].${f}`).filter((f) => !declaredItems.has(f));
+
+  assert(undeclaredItems.length === 0,
+    `这些快照条目字段会落盘但 /v1/data-handling 没声明：${undeclaredItems.join(', ')}`
+    + ' —— items[] 曾是核对盲区，所以 parser 修updated 时这里漂移了却没人发现');
   assert(nonexistent.length === 0,
     `端点声明了这些字段但实际不存在：${nonexistent.join(', ')}`
     + `（监控点字段：${actual.join(', ')}）—— 同样是对外承诺与实现不符`);

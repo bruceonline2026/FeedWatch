@@ -23,3 +23,4 @@ deploy/*.local.ini
 # ── 明确不公开的内容 ──
 #   内部审查报告含生产事故细节、内网 IP、服务器凭据线索，不随仓库公开
 deliverables/
+.qa-tmp/

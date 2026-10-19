@@ -684,6 +684,13 @@ const server = http.createServer(async (req, res) => {
               'url', 'format', 'feedTitle', 'fetchedAt', 'contentHash',
               'items[].id', 'items[].title', 'items[].contentText', 'items[].link',
               'items[].author', 'items[].category', 'items[].publishedAt',
+              // ★ items[].updated（2026-10-19 补）
+              //   parser 修复前 Atom 的 updated 被整个丢弃；修复后它**确实会落盘**，
+              //   而这里没声明 —— 端点本该是「新增落盘字段时先变红」的唯一真源，
+              //   漏了它就是漏网的漂移。
+              //   ⚠️ 现有 e2e 的双向断言**只查 monitors，不查 items[]**，
+              //   所以这处漂移测试抓不到 —— 那是个已知盲区，见下方 notes。
+              'items[].updated',
               'items[].contentHash',
             ],
             // —— 凭据与身份 ——
