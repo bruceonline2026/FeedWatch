@@ -928,6 +928,42 @@ await t('★ /admin 未配 ADMIN_PASSWORD 时必须404（fail closed）', async 
   return `404（fail closed 生效）`;
 });
 
+await t('★ 落地页声称的字段数必须等于 TRACKED_FIELDS（防文案静默过期）', async () => {
+  // ★ 第四道防线（2026-10-19）
+  //
+  // 背景：`web/en.html` 写死了「Six fields compared individually」，
+  // `web/zh.html` 写「标题、正文、链接、作者、分类、发布时间」。
+  // 而真正决定行为的是 `src/diff/engine.js` 的 `TRACKED_FIELDS`。
+  //
+  // ⚠️ **三者之间没有任何测试关联** —— 有人往 TRACKED_FIELDS 加一个字段，
+  //   落地页立刻变成假陈述，而没有任何测试会红。
+  //
+  // 2026-10-19 这一天就是活例子：TRACKED_FIELDS 在 8ccc60c 变成 7 个
+  // （加了 updated），又��� a7a6009 回退到 6 个 —— 两次都没有测试提醒文案。
+  const { __testing } = await import('../src/diff/engine.js');
+  const { readFileSync } = await import('node:fs');
+  const { TRACKED_FIELDS } = __testing;
+  const n = TRACKED_FIELDS.length;
+
+  const read = (f) => readFileSync(new URL(`../${f}`, import.meta.url), 'utf8');
+  const en = read('web/en.html');
+  const zh = read('web/zh.html');
+
+  // 英文版：<N> fields —— 用数词而非具体名字，中英改动时不必同步维护
+  const words = { 5: 'Five', 6: 'Six', 7: 'Seven', 8: 'Eight', 9: 'Nine' };
+  assert(words[n],
+    `TRACKED_FIELDS 现在是 ${n} 个，但没有对应的英文数词写法 —— `
+    + `落地页与实现已脱节，请同步更新 web/en.html 与 web/zh.html`);
+  assert(en.includes(`${words[n]} fields`),
+    `web/en.html 声称的字段数与 TRACKED_FIELDS（${n}）不符 —— `
+    + `应包含「${words[n]} fields」。`
+    + `改了 TRACKED_FIELDS 就要改落地页，这条测试就是为了强制这件事。`);
+
+  // 中文版：只断言它提到了「字段级」，具体清单由英文数词把守
+  assert(/字段级/.test(zh), 'web/zh.html 应提到「字段级」');
+  return `TRACKED_FIELDS=${n} · 落地页「${words[n]} fields」一致`;
+});
+
 await t('★ HTML 响应的 CSP 必须允许内联样式（否则后台变纯文本）', async () => {
   // 背景（2026-10-17）：/admin 曾全局设 CSP `default-src 'none'`，
   // 它把<style> 内联样式一起禁了 —— 页面**拿到完整 HTML 与 CSS，
