@@ -466,12 +466,22 @@ await t('★ /v1/data-handling 与实际落盘字段一致（防六处文案静�
   };
 
   // 四份样本逐个存快照后取真实落盘字段 —— union 才是「实际会落盘的全集」
+  //
+  // ⚠️ 这里**刻意不调store.createMonitor()**，直接用合成 id 存快照。
+  //   原因（实测发现，2026-10-19）：
+  //   · `createMonitor()` 是业务层方法，**不校验 MAX_MONITORS** ——
+  //     实测连调7 次都成功。配额只在 HTTP 层强制（`server.js` 的 `owned >= MAX` 才 429）。
+  //   · 本套件 `MAX_MONITORS: '5'`，而 DIR/DB 是**全程共享**的（结尾才 rmSync）。
+  //     原写法每份样本建一个 monitor，会把这个套件里的 monitor 数
+  //     从 1 顶到 5（正好卡在上限），并**污染后续测试的基线**；
+  //     任何人再加一次 createMonitor 就越界。
+  //   · 门禁只关心「快照条目字段」，与监控点无关 —— 合成 id 足够。
   const actualItemKeys = new Set();
   let i = 0;
   for (const [fmt, parsed] of Object.entries(realItems)) {
-    const m = store.createMonitor({ url: `https://x.com/${fmt}`, name: fmt });
-    store.saveSnapshot(m.id, new Snapshot(m.url, parsed, new Date().toISOString()));
-    const snap = store.serialize().snapshots.find((s) => s.id === m.id);
+    const probeId = `__probe-${fmt}`;
+    store.saveSnapshot(probeId, new Snapshot(`https://x.com/${fmt}`, parsed, new Date().toISOString()));
+    const snap = store.serialize().snapshots.find((s) => s.id === probeId);
     assert(snap?.json?.items?.[0], `${fmt} 样本应产出至少一个条目 —— 否则该协议的字段集缺席，门禁变空`);
     for (const k of Object.keys(snap.json.items[0])) actualItemKeys.add(k);
     i += 1;
