@@ -101,12 +101,24 @@ function nodeText(node) {
     //   fast-xml-parser 只有 preserveOrder:true 才能保留顺序，
     //   而那会把整棵树的输出结构变成数组，重写解析层风险过高。
     //
-    //   影响面（已量化）：
-    //   · 哈希稳定 —— 同一输入结果一致，不会产生虚假变更告警
+    //   影响面（⚠️ 2026-10-19 更正，原结论有误）：
+    //   · ~~哈希稳定 —— 同一输入结果一致，不会产生虚假变更告警~~
+    //     这条**只对「同一输入」成立**，曾被据此判断「不会误报」，是错的：
+    //     同一**语义内容**的不同排布会重建出不同字符串 → 不同 contentHash
+    //     → 被判为「内容变了」。实测（2026-10-19，gstack-qa-lead 提出、我复现）：
+    //       "Hello <b>world</b> and more text" → "world Helloand more text"
+    //       "<b>Hello</b> world and more text" → "Hello world and more text"
+    //       两者对读者完全等价，contentHash 却不同 → changed:true = 误报。
+    //     受控条件下实测误报率 52.4%（Atom/RSS 各 71.4%），且误报 100% 落在
+    //     contentText —— 因为其余字段是原子值，不受拼接顺序影响。
+    //   · 但**现场暴露面极小**：真实 feed 的 HTML 几乎都被整体转义成单个字符串，
+    //     走不到「#text + 子节点并存」这条分支（2026-10-19 实测 0/68 条目命中）。
+    //     所以这是「受控条件下才会触发」的缺陷，不是当前线上 urgent 问题。
     //   · 正文长度与原文略有出入
     //   · 仅「跨标签边界的关键词」可能漏命中
     //   · webhook 只发哈希与长度，不发正文，乱序不会外泄给客户
-    //   故 MVP 阶段接受此限制，不阻塞上线。
+    //   故暂不重写解析层（preserveOrder:true 风险过高），但**注释不得再宣称
+    //   「不会产生虚假变更告警」** —— 下一个人会据此做决策。
     return Object.entries(node)
       .filter(([k]) => !k.startsWith('@_'))
       .map(([, v]) => nodeText(v))
