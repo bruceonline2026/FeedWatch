@@ -20,6 +20,23 @@ import { mkdtempSync, rmSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { startFeedFixture } from './fixtures/feed-server.js';
+import { createServer } from 'node:net';
+
+/**
+ * 向OS 申请一个空闲端口。
+ *
+ * ⚠️ 为什么不用写死的 3190-3199（2026-10-19 修）：
+ *   端口写死时，**并发跑两套必然互撞**（EADDRINUSE / 服务未就绪），
+ *   而这类失败会被误读成「代码坏了」。让内核分配端口从根上避免碰撞。
+ */
+const freePort = () => new Promise((resolve, reject) => {
+  const srv = createServer();
+  srv.on('error', reject);
+  srv.listen(0, '127.0.0.1', () => {
+    const { port } = srv.address();
+    srv.close(() => resolve(port));
+  });
+});
 
 const API_KEY = 'fw_persist_test_bootstrap_key_at_least_32_chars';
 const DIR = mkdtempSync(join(tmpdir(), 'feedwatch-persist-'));
@@ -47,15 +64,57 @@ const assert = (c, m) => { if (!c) throw new Error(m); };
 console.log('\n═══ 持久化回归套件 ═══\n');
 console.log(`  数据文件：${DB}\n`);
 
-/** 起一个服务进程，等它就绪后返回控制句柄 */
-async function boot(port, extraEnv = {}) {
+/**
+ * 起一个服务进程，等它就绪后返回控制句柄
+ *
+ * ⚠️⚠️ 2026-10-19修：这套件原有**三处测试环境耦合**导致偶发红，且症状极具误导性。
+ *
+ * 【现场症状】建点返回 429 → 没有 monitor 可落盘 → 断言报「monitors=0」
+ *   → 后续「重启后监控点仍在」「快照基线仍在」全部连锁失败。
+ *   **看到 monitors=0 时，真正的错误在更早的建点请求里**，别去查落盘。
+ *
+ * 【根因实测结论】(与最初的猜测不同，两条独立的机制)
+ *
+ * ① **MAX_MONITORS='5' 才是真正的瓶颈，不是 CREATE_MAX。**
+ *    实测：同一进程内连建 7 个点 → 1~5 全部 201，第6 个 429「监控点数量已达上限（5）」。
+ *    关键点：限流桶 `buckets` 是**进程内存态**（`server.js:347` 的 `new Map()`，
+ *    且 `/v1/data-handling` 明确声明 rate_limit_buckets 是 in_memory_only），
+ *    **每个新进程都会重置**；而 `MAX_MONITORS` 按 `apiKeyId` 计
+ *    （`server.js:988`），对着**全程共享的 DB** 累积。
+ *    实测：A 进程建 5 个 → 退出 → B 新进程首次建点即429「监控点数量已达上限（5）」。
+ *
+ *    ⚠️ 因此**只放宽 CREATE_MAX 是无效修法**：限流一放开，配额立刻变成新瓶颈，
+ *    失败原因从 A 换成 B，测试照样红。必须同时放宽两者（下方已同时做）。
+ *
+ * ② **端口写死3190-3199** → 并发跑两套时必然互撞（`EADDRINUSE`）。
+ *
+ * ③ **CREATE_MAX 默认 10/分钟**，而本套件有 7 处HTTP 建点。
+ *    单进程内不够用；`e2e.js:57` 早已显式设 `CREATE_MAX:'500'`，
+ *    **唯独本套件漏了** —— 前人踩过并修了 e2e，没修这里。
+ *
+ * 【原则】限流与配额在**生产环境的行为都是对的**，不该改业务代码；
+ *   要改的是测试环境别去撞它们。（对照 e2e.js 的既有做法，保持一致）
+ */
+async function boot(_label, extraEnv = {}) {
+  const port = await freePort();
   const child = spawn(process.execPath, ['src/server.js'], {
     env: {
       ...process.env,
       PORT: String(port),
       PUBLIC_URL: 'https://api.tiici.com',
       FEEDWATCH_BOOTSTRAP_KEY: API_KEY,
-      MAX_MONITORS: '5',
+      // ⚠️ 配额必须**按套件实际建点数**放宽，且要与 CREATE_MAX 一起放宽 ——
+      //   只改其一会让失败原因从一个上限换到另一个（实测，见上方注释）。
+      //   本套件 HTTP 建点 7 处 + MCP 建点数处，留足余量。
+      MAX_MONITORS: '50',
+      // ⚠️ 与 MAX_MONITORS **必须同时**放宽：对齐 e2e.js:57 的既有做法。
+      CREATE_MAX: '500',
+      // 其余限流同样放宽：本套件会反复领Key、建点，全量并发下默认值不够用
+      GETKEY_IP_MAX: '200',
+      KEY_ISSUE_MAX: '200',
+      KEY_ISSUE_DAILY_MAX: '500',
+      GETKEY_DAILY_MAX: '500',
+      MCP_MAX: '500',
       FREE_INTERVALS: '900,3600,21600',
       FEEDWATCH_DATA_DIR: DIR,
       FEEDWATCH_DB: DB,
@@ -69,12 +128,15 @@ async function boot(port, extraEnv = {}) {
   child.stdout.on('data', (d) => { out += d.toString(); });
   child.stderr.on('data', (d) => { out += d.toString(); });
 
-  for (let i = 0; i < 60; i += 1) {
+  // ⚠️ 固定 9 秒预算在负载下偶发不够（报「服务未就绪」，且此时输出为空= 启动慢而非崩）。
+  //   加长到 30 秒：宁可多等，不要让「机器忙」伪装成「代码坏了」。
+  for (let i = 0; i < 200; i += 1) {
     await delay(150);
-    try { if ((await fetch(`http://127.0.0.1:${port}/health`)).ok) return { child, out: () => out }; } catch { /* 未就绪 */ }
+    try { if ((await fetch(`http://127.0.0.1:${port}/health`)).ok) return { child, port, out: () => out }; } catch { /* 未就绪 */ }
   }
   child.kill('SIGKILL');
-  throw new Error(`服务未就绪：${out.slice(0, 200)}`);
+  // ⚠️ 失败时必须带上子进程输出，否则现场无从判断（这正是本次排查绕远路的原因之一）
+  throw new Error(`服务未就绪（已等 30s）：${out.slice(0, 400) || '(子进程无输出= 疑似启动慢或被系统负载拖住)'}`);
 }
 
 const stop = async (h) => { h.child.kill('SIGTERM'); await delay(400); };
@@ -82,8 +144,8 @@ const stop = async (h) => { h.child.kill('SIGTERM'); await delay(400); };
 // ══════════════════════════════════════════════════════════════
 
 await t('写入后落盘文件存在且是合法 JSON', async () => {
-  const p = 3190;
-  const h = await boot(p);
+  const h = await boot();
+  const p = h.port;
   try {
     const auth = { 'content-type': 'application/json', 'x-api-key': API_KEY };
     const r = await fetch(`http://127.0.0.1:${p}/v1/monitors`, {
@@ -104,11 +166,11 @@ await t('写入后落盘文件存在且是合法 JSON', async () => {
 });
 
 await t('★ 重启后监控点仍在（客户监控不消失）', async () => {
-  const h1 = await boot(3191);
+  const h1 = await boot();
   let monId;
   try {
     const auth = { 'content-type': 'application/json', 'x-api-key': API_KEY };
-    const r = await fetch('http://127.0.0.1:3191/v1/monitors', {
+    const r = await fetch(`http://127.0.0.1:${h1.port}/v1/monitors`, {
       method: 'POST', headers: auth,
       body: JSON.stringify({ name: 'survive-restart', url: `${FIX.url}?persist=1` }),
     });
@@ -117,9 +179,9 @@ await t('★ 重启后监控点仍在（客户监控不消失）', async () => {
   } finally { await stop(h1); }
 
   // ★ 重启
-  const h2 = await boot(3192);
+  const h2 = await boot();
   try {
-    const r = await fetch(`http://127.0.0.1:3192/v1/monitors/${monId}`, {
+    const r = await fetch(`http://127.0.0.1:${h2.port}/v1/monitors/${monId}`, {
       headers: { 'x-api-key': API_KEY },
     });
     const m = await r.json();
@@ -131,17 +193,17 @@ await t('★ 重启后监控点仍在（客户监控不消失）', async () => {
 });
 
 await t('★ 重启后快照基线仍在（否则重启即假告警）', async () => {
-  const h1 = await boot(3193);
+  const h1 = await boot();
   let monId;
   try {
     const auth = { 'content-type': 'application/json', 'x-api-key': API_KEY };
-    const r = await fetch('http://127.0.0.1:3193/v1/monitors', {
+    const r = await fetch(`http://127.0.0.1:${h1.port}/v1/monitors`, {
       method: 'POST', headers: auth,
       body: JSON.stringify({ name: 'snap-survive', url: `${FIX.url}?persist=1` }),
     });
     monId = (await r.json()).id;
     // 建点时已预检并保存了快照基线，这里直接触发一次检查确保有基线
-    await fetch(`http://127.0.0.1:3193/v1/monitors/${monId}/check`, { headers: { 'x-api-key': API_KEY } });
+    await fetch(`http://127.0.0.1:${h1.port}/v1/monitors/${monId}/check`, { headers: { 'x-api-key': API_KEY } });
     await delay(300);
   } finally { await stop(h1); }
 
@@ -149,10 +211,10 @@ await t('★ 重启后快照基线仍在（否则重启即假告警）', async (
   const hasSnap = (raw.snapshots ?? []).some((s) => s.id === monId);
   assert(hasSnap, `落盘文件应含 ${monId} 的快照基线，实际 ${JSON.stringify(raw.snapshots?.map((s) => s.id) ?? [])}`);
 
-  const h2 = await boot(3194);
+  const h2 = await boot();
   try {
     // 重启后再检查一次：若基线丢了，会把所有条目当「新增」
-    const r = await fetch(`http://127.0.0.1:3194/v1/monitors/${monId}/check`, {
+    const r = await fetch(`http://127.0.0.1:${h2.port}/v1/monitors/${monId}/check`, {
       method: 'POST', headers: { 'x-api-key': API_KEY },
     });
     const j = await r.json();
@@ -165,10 +227,10 @@ await t('★ 重启后快照基线仍在（否则重启即假告警）', async (
 });
 
 await t('★ 自助领的 API Key 重启后仍可用', async () => {
-  const h1 = await boot(3195);
+  const h1 = await boot();
   let key;
   try {
-    const r = await fetch('http://127.0.0.1:3195/get-key', {
+    const r = await fetch(`http://127.0.0.1:${h1.port}/get-key`, {
       method: 'POST',
       headers: { 'content-type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({ email: 'persist-test@example.com' }).toString(),
@@ -179,9 +241,9 @@ await t('★ 自助领的 API Key 重启后仍可用', async () => {
     await delay(300);
   } finally { await stop(h1); }
 
-  const h2 = await boot(3196);
+  const h2 = await boot();
   try {
-    const r = await fetch('http://127.0.0.1:3196/v1/monitors', {
+    const r = await fetch(`http://127.0.0.1:${h2.port}/v1/monitors`, {
       headers: { 'x-api-key': key },
     });
     assert(r.status === 200,
@@ -191,10 +253,10 @@ await t('★ 自助领的 API Key 重启后仍可用', async () => {
 });
 
 await t('落盘文件里只有 Key 哈希、没有明文', async () => {
-  const h = await boot(3197);
+  const h = await boot();
   let key;
   try {
-    const r = await fetch('http://127.0.0.1:3197/get-key', {
+    const r = await fetch(`http://127.0.0.1:${h.port}/get-key`, {
       method: 'POST',
       headers: { 'content-type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({ email: 'plaintext-check@example.com' }).toString(),
@@ -247,10 +309,10 @@ await t('★ 落盘文件权限必须是 600（同机器其他用户读不到）
   //   feed 标题与正文 —— 那是我们客户的数据。
   //   权限漂移是**静默**的（没有报错、没有告警），所以必须用测试锁住。
   const { statSync } = await import('node:fs');
-  const p = await boot(3198);
+  const p = await boot();
   try {
     const auth = { 'content-type': 'application/json', 'x-api-key': API_KEY };
-    await fetch('http://127.0.0.1:3198/v1/monitors', {
+    await fetch(`http://127.0.0.1:${p.port}/v1/monitors`, {
       method: 'POST', headers: auth,
       body: JSON.stringify({ name: 'perm-check', url: `${FIX.url}?perm=1` }),
     });
@@ -353,10 +415,10 @@ await t('★ /v1/data-handling 与实际落盘字段一致（防六处文案静�
   const { PersistentStore } = await import('../src/persistence.js');
   const { MemoryStore, MonitorService } = await import('../src/service.js');
 
-  const h = await boot(3199);
+  const h = await boot();
   let payload;
   try {
-    const r = await fetch('http://127.0.0.1:3199/v1/data-handling');
+    const r = await fetch(`http://127.0.0.1:${h.port}/v1/data-handling`);
     assert(r.status === 200, `端点应可公开访问（无需 Key），实际 ${r.status}`);
     payload = await r.json();
   } finally { await stop(h); }
@@ -508,9 +570,9 @@ await t('★ /v1/data-handling 与实际落盘字段一致（防六处文案静�
 });
 
 await t('★ /v1/usage 不再声称「内存统计」（客户能直接读到这句话）', async () => {
-  const h = await boot(3290);
+  const h = await boot();
   try {
-    const r = await fetch('http://127.0.0.1:3290/v1/usage', {
+    const r = await fetch(`http://127.0.0.1:${h.port}/v1/usage`, {
       headers: { 'x-api-key': API_KEY },
     });
     assert(r.status === 200, `应 200，实际 ${r.status}`);
