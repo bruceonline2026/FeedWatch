@@ -215,6 +215,39 @@ export function parseJsonFeed(raw) {
     const content = it.content_html ?? it.content_text ?? it.summary ?? '';
     const title = normalizeText(it.title ?? '');
     const url = it.url ?? it.external_url ?? '';
+    /**
+     * ★ 修复记录（2026-10-19，第三个「静默失效」家族实例）：
+     *   JSON Feed 此前只填 `tags`，从不填 `category`。
+     *
+     *   根因是**规范用词差异**，不是笔误：
+     *     · JSON Feed（jsonfeed.org/version/1.1）把这个字段叫 `tags`，
+     *       语义是「作者自拟的自由标签」
+     *     · RSS 2.0 / Atom 1.0 把它叫 `category`，语义更接近「分类」
+     *   两者**不是完全同义**（见下方取舍说明），但 `TRACKED_FIELDS` 追踪的是
+     *   统一键 `category`，于是 JSON Feed 的 `category` 恒为 `undefined`。
+     *
+     *   后果比「少报一个字段」更严重 —— 它**完全静默**：
+     *     ① `Snapshot` 的粗筛哈希只覆盖 TRACKED_FIELDS，
+     *        `String(undefined ?? '')` 恒为 `''` → 哈希与 tags 无关；
+     *     ② `diffSnapshots` 第一层直接 `return { changed:false, reason:'hash_match' }`，
+     *        **逐字段比对（diffItem）根本不进** —— 连一条日志都不产生。
+     *   实测：tags `tech,news` → `tech,ai`（真实变化）→ changed=false, reason=hash_match。
+     *
+     *   ⚠️ 取舍：为什么是「把 tags 映射过去」而不是「把 TRACKED_FIELDS 改成 tags」
+     *     · RSS/Atom 的这个字段本来就叫 category，改 TRACKED_FIELDS 会**削弱它们的能力**
+     *       （等于让 RSS/Atom 的分类变更检测失效）
+     *     · 映射是**加能力**（JSON Feed 也能被追踪），改字段名是**换能力**
+     *   故保留 tags 原生字段 + 额外填 category，两者同源同值。
+     *
+     *   ⚠️ `tags` 本身**不删**：它是 JSON Feed 规范的原生字段，
+     *     将来若要单独追踪（tags 与 category 语义确实不同），
+     *     数据已经在这儿了。删掉等于丢信息、且不可回溯补回（历史快照里没有）。
+     *
+     *   ⚠️ 空标签的语义：`toArray(undefined)` → `[]` → `[].join(',')` → `''`。
+     *     所以无 tags 的条目拿到的是**空串**而非 `undefined`，
+     *     跨轮次稳定、不会产生 `undefined → ''` 的假跳变。
+     */
+    const tags = toArray(it.tags).join(',');
     return makeItem({
       id: it.id ?? url,
       title,
@@ -227,7 +260,9 @@ export function parseJsonFeed(raw) {
       content,
       extra: {
         author: it.authors?.map((a) => a.name).filter(Boolean).join(', ') ?? '',
-        tags: toArray(it.tags).join(','),
+        // 同源同值：category 与 tags 由同一个变量生成，二者不可能漂移
+        category: tags,
+        tags,
       },
     });
   });

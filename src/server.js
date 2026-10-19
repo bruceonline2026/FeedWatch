@@ -692,14 +692,17 @@ const server = http.createServer(async (req, res) => {
               //   所以这处漂移测试抓不到 —— 那是个已知盲区，见下方 notes。
               'items[].updated',
               'items[].contentHash',
-              // ⚠️ items[].category 仅 Atom / RSS 有；JSON Feed 走items[].tags。
-              //   两者不是同一个键，且 `category` 恒被 TRACKED_FIELDS 跟踪，
-              //   而 JSON Feed 的 tags 从不写进 category —— **JSON Feed 的分类
-              //   变更因此检测不到**（已实测 reason=hash_match，第一层粗筛就短路）。
-              //   这里是如实声明「两个键都会落盘」，不是宣称 category 有值。
-              //   ⚠️ 但下面这个分类字段名不一致的缺陷**尚未修**，
-              //   修它会改变 item 的落盘形状（要么补category、要么改 TRACKED_FIELDS），
-              //   故不夹带在本次门禁修复里。
+              // ★ items[].category 现在**三协议都有值**（2026-10-19 修复）。
+              //   此前仅 Atom / RSS 有；JSON Feed 走 items[].tags，
+              //   而 `category` 恒被 TRACKED_FIELDS 跟踪 ——
+              //   **JSON Feed 的分类变更完全检测不到**（实测 reason=hash_match，
+              //   第一层粗筛就短路，连 diffItem 都进不去，零提示）。
+              //   根因是规范用词差异：JSON Feed 叫 `tags`（作者自拟自由标签），
+              //   RSS/Atom 叫 `category`（分类），两者并非完全同义。
+              //   修法是**映射**（tags → category）而非改 TRACKED_FIELDS：
+              //   后者会削弱 RSS/Atom 的能力，映射是加能力不是换能力。
+              //   ⚠️ 两个键都保留、都落盘、都如实声明 —— tags 是 JSON Feed
+              //   规范的原生字段，将来要单独追踪时数据已就位。
               'items[].tags',
               // ★ items[].publishedAtDerived（方案乙 2026-10-19）
               //   published 缺失时 publishedAt 由 updated 顶替，这个布尔标记
