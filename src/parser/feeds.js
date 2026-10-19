@@ -208,6 +208,10 @@ export function parseJsonFeed(raw) {
       title,
       link: url,
       publishedAt: it.date_published ?? it.date_modified ?? '',
+      // ★ 与 Atom 的 atom:updated 同义：JSON Feed 的 date_modified 是
+      //   「内容最后修改时间」。此前它只作为 publishedAt 的兜底被消费，
+      //   date_published 存在时同样**整个丢弃** —— 与 atom:updated 同一缺陷家族。
+      updated: it.date_modified ?? '',
       content,
       extra: {
         author: it.authors?.map((a) => a.name).filter(Boolean).join(', ') ?? '',
@@ -252,6 +256,10 @@ export function parseRss(raw) {
       title: normalizeText(firstText(it.title)),
       link: rssLink(it) || aboutOf(it),
       publishedAt: firstText(it.pubDate) || firstText(it['dc:date']),
+      // RSS 2.0 **没有** <updated> 元素，恒为空 —— 这是符合标准的行为。
+      // 不拿 pubDate 填：pubDate 是发布时间，冒充「修改时间」等于造假数据，
+      // 且会让每次 diff 都把它当变化信号。
+      updated: '',
       content: firstText(it['content:encoded']) || firstText(it.description),
       extra: {
         author: firstText(it['dc:creator']) || firstText(it.author),
@@ -280,7 +288,15 @@ export function parseAtom(raw) {
       id: firstText(en.id),
       title: normalizeText(firstText(en.title)),
       link: atomLink(en),
+      // ⚠️ publishedAt 的 `|| updated` 兜底是**向后兼容**，不能删（见 makeItem 注释）
       publishedAt: firstText(en.published) || firstText(en.updated),
+      // ★ P0 修复（2026-10-19）：atom:updated 曾被整个丢弃。
+      //   它与 atom:published 语义不同 —— published 是「首次发布」，
+      //   updated 是 RFC 4287 §4.2.15 定义的「publisher 认为 significant 的修改」，
+      //   是 Atom 里**唯一为「条目被修改」设计的标准字段**。
+      //   折进 publishedAt 后：published 存在时 updated 永远取不到
+      //   → 只改 updated（RFC 4287 的标准做法）永远检不出变化。
+      updated: firstText(en.updated),
       content: firstText(en.content) || firstText(en.summary),
       extra: {
         author: toArray(en.author).map((a) => normalizeText(firstText(a.name))).filter(Boolean).join(', '),
@@ -290,14 +306,24 @@ export function parseAtom(raw) {
   };
 }
 
-function makeItem({ id, title, link, publishedAt, content, extra = {} }) {
+function makeItem({ id, title, link, publishedAt, updated, content, extra = {} }) {
   const cleanTitle = normalizeText(title);
   const cleanContent = stripHtml(content);
   return {
     id: normalizeText(id) || sha256(cleanTitle + cleanContent).slice(0, 32),
     title: cleanTitle,
     link: normalizeText(link),
+    // ⚠️ publishedAt 保留「published 缺失时用 updated 兜底」的旧行为。
+    //   RFC 4287 §4.2.14 规定 entry 必须有 published，但现实中大量 feed 只给 updated。
+    //   改这个会破坏既有基线与 JSON 快照，故**只增不改**。
+    //   `updated` 另设一字段承载「修改时间」，两者不再互相顶替。
     publishedAt: normalizeText(publishedAt),
+    /**
+     * ★ 最后一次「显著修改」时间 —— 变化信号。
+     * RSS 2.0 无此元素，恒为 ''；**这是符合标准的行为，不造假数据填满它**。
+     * 统一字段名 ≠ 每个协议都得有值。
+     */
+    updated: normalizeText(updated),
     contentHash: sha256(cleanContent),
     contentText: cleanContent,
     ...extra,

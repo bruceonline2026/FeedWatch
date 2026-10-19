@@ -14,7 +14,27 @@ import { createHash } from 'node:crypto';
 
 const sha256 = (s) => createHash('sha256').update(s, 'utf8').digest('hex');
 
-const TRACKED_FIELDS = ['title', 'contentText', 'link', 'publishedAt', 'author', 'category'];
+/**
+ * ★ P0 修复（2026-10-19）：加入 'updated'。
+ *
+ * 它是 RFC 4287 §4.2.15 里 publisher 声明「本次修改 significant」的时间戳，
+ * 也就是 Atom 里**唯一为「条目被修改」设计的标准字段**。
+ * 此前 parser 把它折进了 publishedAt（`published || updated`），
+ * published 一旦存在，updated 就永远取不到 → 改 updated 检不出任何变化。
+ *
+ * 为什么不能靠 publishedAt 代替：
+ *   publishedAt 语义是「首次发布时间」，**不应因编辑而改变**（这是它的定义）。
+ *   若让 updated 去覆盖它，每次编辑都会伪造一次「重新发布」，
+ *   下游按 publishedAt 排序会得到错误的条目顺序。
+ *   两个字段语义不同，必须分开存、分开比。
+ *
+ * ⚠️ RSS 2.0 无此元素，其 updated 恒为 '' —— 空对空不产生 diff，不会有假告警。
+ * ⚠️ 存量快照（升级前落盘）的 item 上**没有** updated 键：
+ *   「键不存在」= 当初没采集这个字段，**不等于**「值是空串」。
+ *   若当成空串，升级后第一次检查会给每条存量条目报一条假变更（内容一个字没改）。
+ *   故 diffItem 里用 `!(f in oldItem)` 跳过 —— 见该处注释。
+ */
+const TRACKED_FIELDS = ['title', 'contentText', 'link', 'publishedAt', 'updated', 'author', 'category'];
 
 export class Snapshot {
   /**
@@ -52,9 +72,13 @@ export class Snapshot {
      *   而这里需要的只是「一个能代表整体是否变化的指纹」，
      *   在 Snapshot 层重算最安全、影响面最小。
      *
-     * 成本：字符串拼接从「id+正文哈希」变成「id+6 个字段」，
+     * 成本：字符串拼接从「id+正文哈希」变成「id+全部 TRACKED_FIELDS 个字段」，
      *   但这仍是一次性 O(n) 且n 通常是几十到几百 —— 相比省掉的
-     *   逐字段 diff（O(n×6)）依然是压倒性的划算。
+     *   逐字段 diff（O(n×字段数)）依然是压倒性的划算。
+     *
+     * ★ 2026-10-19：新增 TRACKED_FIELDS 成员时**这里自动覆盖**，无需另改。
+     *   粗筛哈希遍历的就是 TRACKED_FIELDS 本身（而非某份手写副本），
+     *   所以「加了字段却忘了让粗筛感知」这类漏洞结构上不会发生。
      */
     this.contentHash = sha256(
       parsed.items
@@ -134,6 +158,12 @@ export function diffSnapshots(oldSnap, newSnap) {
 function diffItem(oldItem, newItem) {
   const out = [];
   for (const f of TRACKED_FIELDS) {
+    // ★ 存量基线兼容（2026-10-19）：旧快照的 item 上**没有** `updated` 这个键。
+    //   「键不存在」意思是「当初根本没采集这个字段」，而不是「当时的值是空串」。
+    //   两者必须区分：若把 undefined 当成 ''，升级后第一次检查会给**每一条存量条目**
+    //   报一条 `updated: '' → '2026-10-18T…'` 的假变更 —— 内容一个字都没改。
+    //   正确做法是：没有基线可比，就不声称它变了（下一轮基线即含updated，自我修复）。
+    if (!(f in oldItem)) continue;
     const a = oldItem[f] ?? '';
     const b = newItem[f] ?? '';
     if (a === b) continue;

@@ -26,7 +26,7 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
-    "test": "node scripts/selfcheck-silent.js && node scripts/selftest.js && node scripts/regression.js && node scripts/regression-functional.js && node scripts/regression-scheduler.js && node scripts/e2e.js && node scripts/p0-regression.js && node scripts/persistence-regression.js",
+    "test": "node scripts/selfcheck-silent.js && node scripts/selftest.js && node scripts/regression.js && node scripts/regression-functional.js && node scripts/regression-scheduler.js && node scripts/e2e.js && node scripts/p0-regression.js && node scripts/persistence-regression.js && node scripts/atom-updated-regression.js",
     "test:live": "env -u HTTP_PROXY -u HTTPS_PROXY -u http_proxy -u https_proxy node scripts/livefeed-test.js",
     "selftest": "node scripts/selftest.js",
     "regression": "node scripts/regression.js",
