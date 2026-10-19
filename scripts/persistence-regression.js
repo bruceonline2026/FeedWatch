@@ -427,6 +427,23 @@ await t('★ /v1/data-handling 与实际落盘字段一致（防六处文案静�
     <content type="html">正文</content>
   </entry>
 </feed>`),
+    // ⚠️ 第二个 Atom 样本：**故意不给 published**（只给 updated）——
+    //   这是 `publishedAtDerived` 唯一会出现的情形（实测：给了 published 时
+    //   该标记为 undefined，不落盘）。
+    //   若样本里只有「有 published」那一种，门禁 union 就永远不含这个字段，
+    //   于是「声明了但从没验证」—— **换成真跑也照样可能有盲区**。
+    //   门禁的价值取决于样本是否覆盖「条件字段出现过」的那条路径。
+    atomDerived: parseAtom(`<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom"><title>F</title>
+  <entry>
+    <id>tag:e.com,2026:2</id><title>标题2</title>
+    <link href="https://e.com/2"/>
+    <updated>2026-10-15T09:30:00Z</updated>
+    <author><name>作者</name></author>
+    <category term="分类"/>
+    <content type="html">正文</content>
+  </entry>
+</feed>`),
     rss: parseRss(`<?xml version="1.0" encoding="utf-8"?>
 <rss version="2.0"><channel><title>F</title>
   <item>
@@ -448,20 +465,23 @@ await t('★ /v1/data-handling 与实际落盘字段一致（防六处文案静�
     })),
   };
 
-  // 三协议逐个存快照后取真实落盘字段 —— union 才是「实际会落盘的全集」
+  // 四份样本逐个存快照后取真实落盘字段 —— union 才是「实际会落盘的全集」
   const actualItemKeys = new Set();
   let i = 0;
   for (const [fmt, parsed] of Object.entries(realItems)) {
     const m = store.createMonitor({ url: `https://x.com/${fmt}`, name: fmt });
     store.saveSnapshot(m.id, new Snapshot(m.url, parsed, new Date().toISOString()));
     const snap = store.serialize().snapshots.find((s) => s.id === m.id);
+    assert(snap?.json?.items?.[0], `${fmt} 样本应产出至少一个条目 —— 否则该协议的字段集缺席，门禁变空`);
     for (const k of Object.keys(snap.json.items[0])) actualItemKeys.add(k);
     i += 1;
   }
-  // ⚠️ 三条协议必须都真的跑出条目 —— 若某个协议解析失败返回空 items，
-  //   它的字段集就悄悄缺席，union 变成「少一个协议」，门禁又是空的。
-  assert(i === 3 && actualItemKeys.size > 0,
-    `三协议样本应各自产出条目，实际拿到 ${actualItemKeys.size} 个字段 —— 样本本身失效`);
+  // ⚠️ 样本必须覆盖「条件字段出现过」的路径：publishedAtDerived 只在
+  //   「Atom 且无 published」时出现。若这条断言在，说明样本退化成了全绿 ——
+  //   **门禁绿了但没在测**，这正是本条门禁曾经的状态。
+  assert(actualItemKeys.has('publishedAtDerived'),
+    '样本未覆盖 publishedAtDerived（缺「Atom 无 published」这一路）'
+    + ' —— 门禁会绿但没在测派生值字段，等于退回空转门禁');
 
   const declaredItems = new Set(payload.on_disk['store.json'].snapshots);
   const undeclaredItems = [...actualItemKeys]

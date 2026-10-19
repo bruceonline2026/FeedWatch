@@ -302,6 +302,11 @@ export function parseAtom(raw) {
       link: atomLink(en),
       // ⚠️ publishedAt 的 `|| updated` 兜底是**向后兼容**，不能删（见 makeItem 注释）
       publishedAt: firstText(en.published) || firstText(en.updated),
+      // ★ 方案乙（2026-10-19）：标记「publishedAt 是派生值」。
+      //   仅当 published 缺失、实际由 updated 顶替时才为true。
+      //   实测影响面：7 个 Atom 源里 2 个（martinfowler.com 30 条 /
+      //   overreacted.io 59 条）属此类 —— 不是边缘情况。
+      publishedAtDerived: !firstText(en.published) && !!firstText(en.updated),
       // ★ P0 修复（2026-10-19）：atom:updated 曾被整个丢弃。
       //   它与 atom:published 语义不同 —— published 是「首次发布」，
       //   updated 是 RFC 4287 §4.2.15 定义的「publisher 认为 significant 的修改」，
@@ -318,7 +323,7 @@ export function parseAtom(raw) {
   };
 }
 
-function makeItem({ id, title, link, publishedAt, updated, content, extra = {} }) {
+function makeItem({ id, title, link, publishedAt, publishedAtDerived, updated, content, extra = {} }) {
   const cleanTitle = normalizeText(title);
   const cleanContent = stripHtml(content);
   return {
@@ -330,6 +335,16 @@ function makeItem({ id, title, link, publishedAt, updated, content, extra = {} }
     //   改这个会破坏既有基线与 JSON 快照，故**只增不改**。
     //   `updated` 另设一字段承载「修改时间」，两者不再互相顶替。
     publishedAt: normalizeText(publishedAt),
+    /**
+     * ★ 派生值标记（方案乙，2026-10-19）：publishedAt 缺失时它由 updated 顶替，
+     * 是**派生值**而非独立字段，却参与变更判定与上报 → 客户看到「发布时间变了」
+     * 会误以为文章被重新发布。这是**误标**（不是凭空假告警）：
+     * publisher 按 RFC 4287 §4.2.15 确实声明了「显著修改」，只是字段名错。
+     *
+     * ⚠️ 只给 true，不给 false —— 未声明就是 false，item 形状更小。
+     *⚠️ diffItem 必须读**新 item** 的这个标记，见 engine.js 处的注释。
+     */
+    ...(publishedAtDerived ? { publishedAtDerived: true } : {}),
     /**
      * ★ 最后一次「显著修改」时间 —— 变化信号。
      * RSS 2.0 无此元素，恒为 ''；**这是符合标准的行为，不造假数据填满它**。

@@ -206,6 +206,25 @@ function diffItem(oldItem, newItem) {
      * 保留 —— 它是通用的防御，任何未来新增字段都会自动获得这层保护。
      */
     if (!(f in oldItem)) continue;
+    /**
+     * ★ 方案乙（2026-10-19）：跳过「派生值」的 publishedAt。
+     *
+     * ⚠️⚠️ **必须读 `newItem`，绝不能读 `oldItem`** —— 这是本条最容易写错的地方：
+     *   `oldItem` 来自 `Snapshot.fromJSON`，而**升级前的旧快照没有
+     *   `publishedAtDerived` 这个键**（实测确认）。
+     *     读 oldItem → 旧基线缺键 = falsy → **升级后首轮仍报假变更**，
+     *       要等第二轮基线刷新才收敛 —— 而首轮就把所有存量监控点打爆了。
+     *     读 newItem → 首轮即生效，对任意旧基线都成立。
+     *   判定业务属性要用**当前解析出的新数据**，不能拿旧快照的「缺失」去猜。
+     *
+     * ⚠️ 符号也别写反：条件是 `publishedAtDerived === true` 才跳过。
+     *   写成 `!publishedAtDerived` 会把**正常源**（published 真实存在、
+     *   标记不存在）全部跳过 —— 实测验证过：符号一反，整个验证结论颠倒。
+     *
+     * 收益是「消除误标」，代价是「完全丢弃该源的修改时间变化信号」——
+     * 这是「宁可漏报不可误报」的延续，不是「修好了误报」。
+     */
+    if (f === 'publishedAt' && newItem.publishedAtDerived === true) continue;
     const a = oldItem[f] ?? '';
     const b = newItem[f] ?? '';
     if (a === b) continue;

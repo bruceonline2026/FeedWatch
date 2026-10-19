@@ -701,6 +701,11 @@ const server = http.createServer(async (req, res) => {
               //   修它会改变 item 的落盘形状（要么补category、要么改 TRACKED_FIELDS），
               //   故不夹带在本次门禁修复里。
               'items[].tags',
+              // ★ items[].publishedAtDerived（方案乙 2026-10-19）
+              //   published 缺失时 publishedAt 由 updated 顶替，这个布尔标记
+              //   告诉 diffItem「它是派生值，别拿它当变化信号」。
+              //   ⚠️ 条件展开：仅派生条目才有此键，故只在派生源落盘时出现。
+              'items[].publishedAtDerived',
             ],
             // —— 凭据与身份 ——
             apikeys: ['id', 'hash', 'label', 'createdAt', 'parentId', 'isBootstrap'],
