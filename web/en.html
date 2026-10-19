@@ -4,9 +4,9 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>FeedWatch — RSS/Atom change monitoring API | Detect edits with field-level diffs</title>
-<meta name="description" content="Change monitoring API for RSS, Atom and JSON Feed. Unlike tools that only report new items, FeedWatch detects edits to existing items and reports field-level diffs. REST API and MCP Server.">
+<meta name="description" content="Change monitoring API for RSS, Atom and JSON Feed. Detects edits to existing items and reports field-level diffs — which field changed, and from what to what. REST API and MCP Server.">
 <meta property="og:title" content="FeedWatch — Know when a feed changes, not just grows">
-<meta property="og:description" content="Most feed monitors only say a new item appeared. FeedWatch detects edits to existing items and reports field-level diffs.">
+<meta property="og:description" content="A feed reader tells you how many items are new. FeedWatch tells you which field of an existing item changed, and what it changed from.">
 <meta property="og:type" content="website">
 <link rel="alternate" hreflang="zh-CN" href="https://api.tiici.com/zh/">
 <link rel="alternate" hreflang="en" href="https://api.tiici.com/">
@@ -196,10 +196,11 @@ footer{padding:34px 0;font-size:13px;color:var(--text-3)}
     <span class="badge"><span class="dot"></span>Public beta · API is live</span>
     <h1>Know when a feed <em>changes</em>, not just grows</h1>
     <p class="lede">
-      Most monitoring tools can only tell you <strong>a new item appeared</strong>.
-      But a corrected typo, a quietly raised price, a reworded policy clause — these are
-      <strong>edits to existing items</strong>. They produce no new item, so they get missed.
-      FeedWatch detects them and reports <strong>field-level diffs</strong>.
+      A feed reader tells you how many items are new. But a corrected typo, a quietly
+      raised price, a reworded policy clause — these are <strong>edits to existing
+      items</strong>. They produce no new item, so in a reader they look like nothing
+      happened. FeedWatch detects them and reports <strong>field-level diffs</strong>:
+      which field, and what it changed from.
     </p>
     <div class="btn-row">
       <a href="/get-key" class="btn btn-primary btn-lg">Get an API key</a>
@@ -217,12 +218,12 @@ footer{padding:34px 0;font-size:13px;color:var(--text-3)}
   <div class="wrap">
     <div class="pg">
       <div class="pc bad">
-        <h3>Monitors that only report additions</h3>
+        <h3>Looking only at new items</h3>
         <div class="chg rm"><span class="lbl">Reported</span>no change</div>
         <div class="chg rm"><span class="lbl">Reality</span>price $19.99 → <span class="del">$29.99</span></div>
         <p style="font-size:13px;color:var(--text-2);margin-top:14px;line-height:1.6">
-          The item id never changed, but its content did. The tool only diffs the
-          <em>set</em> of ids, so it concludes &ldquo;no change&rdquo;.
+          The item id never changed, but its content did. If you compare only the
+          <em>set</em> of ids, you conclude &ldquo;no change&rdquo;.
           No alert fires — for exactly the change you most needed to know about.
         </p>
       </div>
