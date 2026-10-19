@@ -15,26 +15,62 @@ import { createHash } from 'node:crypto';
 const sha256 = (s) => createHash('sha256').update(s, 'utf8').digest('hex');
 
 /**
- * ★ P0 修复（2026-10-19）：加入 'updated'。
+ * ★ 2026-10-19 修复与**同日回退**（实测发现引入 100% 假阳性）
  *
- * 它是 RFC 4287 §4.2.15 里 publisher 声明「本次修改 significant」的时间戳，
- * 也就是 Atom 里**唯一为「条目被修改」设计的标准字段**。
+ * ── 第一次修复做了什么 ──
+ * `updated` 是 RFC 4287 §4.2.15 里 publisher 声明「本次修改 significant」的
+ * 时间戳，也就是 Atom 里**唯一为「条目被修改」设计的标准字段**。
  * 此前 parser 把它折进了 publishedAt（`published || updated`），
- * published 一旦存在，updated 就永远取不到 → 改 updated 检不出任何变化。
+ * published 一旦存在，updated 就永远取不到 → 只改 updated 检不出变化。
+ * 所以第一次修复把它加进了 TRACKED_FIELDS。**这个判断本身是对的。**
  *
- * 为什么不能靠 publishedAt 代替：
- *   publishedAt 语义是「首次发布时间」，**不应因编辑而改变**（这是它的定义）。
- *   若让 updated 去覆盖它，每次编辑都会伪造一次「重新发布」，
- *   下游按 publishedAt 排序会得到错误的条目顺序。
- *   两个字段语义不同，必须分开存、分开比。
+ * ── 为什么必须回退（实测，非推测）──
+ * 把它放进 TRACKED_FIELDS 意味着它进了**粗筛哈希**（见下方 Snapshot 构造）
+ * 与**diff 载荷**。但「时间戳变了」**不携带任何内容信息**：
  *
- * ⚠️ RSS 2.0 无此元素，其 updated 恒为 '' —— 空对空不产生 diff，不会有假告警。
- * ⚠️ 存量快照（升级前落盘）的 item 上**没有** updated 键：
- *   「键不存在」= 当初没采集这个字段，**不等于**「值是空串」。
- *   若当成空串，升级后第一次检查会给每条存量条目报一条假变更（内容一个字没改）。
- *   故 diffItem 里用 `!(f in oldItem)` 跳过 —— 见该处注释。
+ *   实测：Atom，仅 updated 变化、内容一字未改
+ *     changed: true | reason: structural_diff | diff 字段: ["updated"]
+ *     模拟一整天 4 次检查（内容全程未改）→ 告警 4 条，纯时间戳 4 条
+ *     **假阳性率 100%**
+ *
+ *   根因：现实中大量 feed 每次构建都会刷新 entry 的 updated
+ *   （CMS 重新生成、聚合器重排、缓存重建都会），而内容根本没变。
+ *   Feedbin 早在 2014年就放弃了依赖 `<updated>`（"which was not always
+ *   available"），改用「正文长度变化 > 50 字符」判定 —— 见下。
+ *
+ *   ⚠️ 我原先只防住了「updated 不存在」（空对空不产生 diff），
+ *     没防住「updated 乱填」—— 存在但每次刷新。后者才是常见的。
+ *
+ * ── 为什么移出而不是「仅当内容也变才报」──
+ * 若 updated 留在 TRACKED_FIELDS 里靠载荷层过滤，粗筛哈希仍会因它变化
+ * 而放行 → 每次构建都要跑完整的逐字段 diff（O(n×字段数)），
+ * **在零信息量上把成本付满**。移出后粗筛直接 hash_match，省掉全部开销。
+ *
+ * ── 那updated 就完全没用了吗 ──
+ * 不是。**parser 仍然采集并落盘它**（见 feeds.js），保留两个价值：
+ *   ① 将来若找到可靠的「如何区分真修改与重建噪声」判据，可直接启用
+ *   ② 排障时能回答「发布方自己说它改过吗」—— 这是唯一的官方声明
+ * 但它**不参与**判定，也**不进**对外载荷。
+ *
+ * 依据：Feedbin 的教训 + 实测 100% 假阳性。
+ * 若将来要重新引入，**必须**先解决「时间戳刷新 ≠ 内容修改」的区分问题，
+ * 且默认按「宁可漏报不可误报」取舍 —— 误报会让用户关掉通知然后不再信任。
  */
-const TRACKED_FIELDS = ['title', 'contentText', 'link', 'publishedAt', 'updated', 'author', 'category'];
+const TRACKED_FIELDS = ['title', 'contentText', 'link', 'publishedAt', 'author', 'category'];
+
+/**
+ * ⚠️ **辅助信号：不参与判定、不进载荷**（见上方回退理由）
+ *
+ * parser 会采集它、快照会存它，但：
+ *   · 不在 TRACKED_FIELDS → 粗筛哈希不含它 → 变化不触发 changed
+ *   · 不在 diff 载荷里→ 用户不会收到 "字段 updated 从 X 变成 Y"
+ *
+ * 保留它的唯一目的是**可观测性**：后台排障时可回答
+ * 「发布方是否声明过它改过这条」，这是官方语义，排查时有用。
+ *
+ * 实测依据：仅 updated 变化、内容未改 → 假阳性率 100%。
+ */
+export const AUX_SIGNAL_FIELDS = Object.freeze(['updated']);
 
 export class Snapshot {
   /**
@@ -158,11 +194,17 @@ export function diffSnapshots(oldSnap, newSnap) {
 function diffItem(oldItem, newItem) {
   const out = [];
   for (const f of TRACKED_FIELDS) {
-    // ★ 存量基线兼容（2026-10-19）：旧快照的 item 上**没有** `updated` 这个键。
-    //   「键不存在」意思是「当初根本没采集这个字段」，而不是「当时的值是空串」。
-    //   两者必须区分：若把 undefined 当成 ''，升级后第一次检查会给**每一条存量条目**
-    //   报一条 `updated: '' → '2026-10-18T…'` 的假变更 —— 内容一个字都没改。
-    //   正确做法是：没有基线可比，就不声称它变了（下一轮基线即含updated，自我修复）。
+    /**
+     * 存量基线兼容：**键不存在 ≠ 值为空串**。
+     *
+     * 旧快照的 item 上可能没有某个键（升级前没采集 / 之后才加的字段）。
+     * 缺键意思是「当初根本没采集这个字段」，把它当成 '' 会报出一条
+     * `'' → '2026-10-18T…'` 的假变更 —— 而内容一个字都没改。
+     * 正确做法：没有基线可比就不声称它变了（下一轮基线即含该字段，自我修复）。
+     *
+     * 注：`updated` 已移出 TRACKED_FIELDS（见上方回退理由），但这条守卫
+     * 保留 —— 它是通用的防御，任何未来新增字段都会自动获得这层保护。
+     */
     if (!(f in oldItem)) continue;
     const a = oldItem[f] ?? '';
     const b = newItem[f] ?? '';
