@@ -389,40 +389,92 @@ await t('★ /v1/data-handling 与实际落盘字段一致（防六处文案静�
   // 反向也查一遍：声明了但实际不存在，同样是漂移
   const nonexistent = [...declared].filter((f) => !actual.includes(f) && !f.includes('.'));
 
-  // ★★ 快照 items 的双向核对（2026-10-19 补）
-  // 上面只查了 monitors，**items[] 一直是盲区** ——
-  //   所以 parser 修复新增 `updated` 字段时，/v1/data-handling 没跟着改，
-  //   而测试不会红（它根本不查 items）。这就是「端点是唯一真源」失效的原因。
+  // ★★ 快照 items 的双向核对（2026-10-19 补，2026-10-19 再修）
+  //
+  // ⚠️⚠️ 二次修复：这道门禁曾经**看起来在守、实际是空的**。
+  //
+  // 首版（14e06f7）用**手写 item 字面量**当"实际落盘字段"：
+  //     items: [{ id:'tag:…', title:'标题', publishedAt:…, updated:…, category:'分类', … }]
+  // 它只能验证「声明里有没有我手写进去的那几个字段」。
+  // **parser 新增任何没写进这个字面量的字段，它都测不到** ——
+  // 实测：给 parser 加 `publishedAtDerived`（确实会落盘）→ 这道门禁依然全绿。
+  //
+  // 为什么这比「没有门禁」更危险：门禁的存在会让人**不再去补真正的门禁**。
+  //   team-lead 建它时以为「新增落盘字段会先变红」，我也据此断言过
+  //   「方案乙会被这道门拦住」—— 两人都没验证过它真的会红。
+  //   **「看起来有防线」比「没有防线」更费命。**
+  //
+  // 教训（写在这里防止重犯）：
+  //   **声称「有测试守着」之前，必须先验证「那个测试真的会红」。**
+  //
+  // 现改为**真跑三种协议的 parser**，取真实输出做核对。
+  // ⚠️ 必须覆盖 JSON Feed —— 它的 `category` 缺陷就藏在这：
+  //   手写字面量里写了 `category:'分类'`，而真跑 JSON Feed 得到的是 `tags`、
+  //   `category` 恒为 undefined。**手写 fixture 恰好把这个缺陷盖住了。**
   const { Snapshot } = await import('../src/diff/engine.js');
-  const mon2 = store.createMonitor({ url: 'https://x.com/feed2' });
-  store.saveSnapshot(mon2.id, new Snapshot('https://x.com/feed2', {
-    format: 'atom',
-    title: 'F',
-    items: [{
-      id: 'tag:e.com,2026:1',
-      title: '标题',
-      link: 'https://e.com/1',
-      publishedAt: '2026-10-01T00:00:00Z',
-      updated: '2026-10-15T09:30:00Z',   // ← parser 修复后确实会有
-      contentText: '正文',
-      contentHash: 'h1',
-      author: '作者',
-      category: '分类',
-    }],
-  }, new Date().toISOString()));
+  const { parseAtom, parseRss, parseJsonFeed } = await import('../src/parser/feeds.js');
+
+  const realItems = {
+    atom: parseAtom(`<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom"><title>F</title>
+  <entry>
+    <id>tag:e.com,2026:1</id><title>标题</title>
+    <link href="https://e.com/1"/>
+    <published>2026-10-01T00:00:00Z</published>
+    <updated>2026-10-15T09:30:00Z</updated>
+    <author><name>作者</name></author>
+    <category term="分类"/>
+    <content type="html">正文</content>
+  </entry>
+</feed>`),
+    rss: parseRss(`<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0"><channel><title>F</title>
+  <item>
+    <guid>e.com,1</guid><title>标题</title><link>https://e.com/1</link>
+    <pubDate>Mon, 01 Oct 2026 00:00:00 GMT</pubDate>
+    <dc:creator>作者</dc:creator><category>分类</category>
+    <description>正文</description>
+  </item>
+</channel></rss>`),
+    jsonfeed: parseJsonFeed(JSON.stringify({
+      version: 'https://jsonfeed.org/version/1.1', title: 'F',
+      items: [{
+        id: 'e.com,1', title: '标题', url: 'https://e.com/1',
+        authors: [{ name: '作者' }], tags: ['分类'],
+        date_published: '2026-10-01T00:00:00Z',
+        date_modified: '2026-10-15T09:30:00Z',
+        content_text: '正文',
+      }],
+    })),
+  };
+
+  // 三协议逐个存快照后取真实落盘字段 —— union 才是「实际会落盘的全集」
+  const actualItemKeys = new Set();
+  let i = 0;
+  for (const [fmt, parsed] of Object.entries(realItems)) {
+    const m = store.createMonitor({ url: `https://x.com/${fmt}`, name: fmt });
+    store.saveSnapshot(m.id, new Snapshot(m.url, parsed, new Date().toISOString()));
+    const snap = store.serialize().snapshots.find((s) => s.id === m.id);
+    for (const k of Object.keys(snap.json.items[0])) actualItemKeys.add(k);
+    i += 1;
+  }
+  // ⚠️ 三条协议必须都真的跑出条目 —— 若某个协议解析失败返回空 items，
+  //   它的字段集就悄悄缺席，union 变成「少一个协议」，门禁又是空的。
+  assert(i === 3 && actualItemKeys.size > 0,
+    `三协议样本应各自产出条目，实际拿到 ${actualItemKeys.size} 个字段 —— 样本本身失效`);
 
   const declaredItems = new Set(payload.on_disk['store.json'].snapshots);
-  const actualItem = Object.keys(store.serialize().snapshots[0].json.items[0]);
-  const undeclaredItems = actualItem.map((f) => `items[].${f}`).filter((f) => !declaredItems.has(f));
+  const undeclaredItems = [...actualItemKeys]
+    .map((f) => `items[].${f}`).filter((f) => !declaredItems.has(f));
 
   assert(undeclaredItems.length === 0,
     `这些快照条目字段会落盘但 /v1/data-handling 没声明：${undeclaredItems.join(', ')}`
-    + ' —— items[] 曾是核对盲区，所以 parser 修updated 时这里漂移了却没人发现');
+    + ' —— 这道门禁已改为真跑 parser，若仍报出，说明端点声明漏了真实字段');
   assert(nonexistent.length === 0,
     `端点声明了这些字段但实际不存在：${nonexistent.join(', ')}`
     + `（监控点字段：${actual.join(', ')}）—— 同样是对外承诺与实现不符`);
 
-  return `${actual.length} 个实际字段全部已声明（双向核对）`;
+  return `三协议 ${actualItemKeys.size} 个实际字段全部已声明（真跑 parser 双向核对）`;
 });
 
 await t('★ /v1/usage 不再声称「内存统计」（客户能直接读到这句话）', async () => {

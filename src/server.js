@@ -692,6 +692,15 @@ const server = http.createServer(async (req, res) => {
               //   所以这处漂移测试抓不到 —— 那是个已知盲区，见下方 notes。
               'items[].updated',
               'items[].contentHash',
+              // ⚠️ items[].category 仅 Atom / RSS 有；JSON Feed 走items[].tags。
+              //   两者不是同一个键，且 `category` 恒被 TRACKED_FIELDS 跟踪，
+              //   而 JSON Feed 的 tags 从不写进 category —— **JSON Feed 的分类
+              //   变更因此检测不到**（已实测 reason=hash_match，第一层粗筛就短路）。
+              //   这里是如实声明「两个键都会落盘」，不是宣称 category 有值。
+              //   ⚠️ 但下面这个分类字段名不一致的缺陷**尚未修**，
+              //   修它会改变 item 的落盘形状（要么补category、要么改 TRACKED_FIELDS），
+              //   故不夹带在本次门禁修复里。
+              'items[].tags',
             ],
             // —— 凭据与身份 ——
             apikeys: ['id', 'hash', 'label', 'createdAt', 'parentId', 'isBootstrap'],
